@@ -10,14 +10,15 @@ COPY . .
 # Install project dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Set environment variable FLASK_APP
-ENV FLASK_APP=app.py
-
-# Set a default port and allow to override it
+# Default port to use if one isn't available in the environment
 ENV PORT=5000
 
-# Expose the default port or the one set in the environment
+# Set flask to run in production or development based on availability of PORT in environment
+ENV FLASK_ENV=${FLASK_ENV:-development}
+ENV FLASK_APP=app.py
+
+# Expose the chosen port
 EXPOSE $PORT
 
 # The command to run your application
-CMD flask run --host=0.0.0.0 --port=${PORT:-5000}
+CMD if [ "$FLASK_ENV" = "production" ] ; then gunicorn -b :$PORT app:app ; else flask run --host=0.0.0.0 --port=$PORT ; fi
