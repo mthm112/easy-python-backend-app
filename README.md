@@ -1,4 +1,4 @@
-# Python Flask User Register/Login API
+# 🐍 Python Flask User Register/Login API
 
 This is a Python Flask application that provides various 
 API routes for user registration, login, and profile update actions.
@@ -55,7 +55,7 @@ Key configuration variables include:
 
 
 
-# API Testing with Postman
+# ✉️ API Testing with Postman
 
 This Python Flask API provides different endpoints for managing user registration, login, and profile updates. 
 The API can be tested using different tools like Postman, cURL etc. In this documentation, we demonstrate 
@@ -127,7 +127,7 @@ If the token expires or is otherwise incorrect, the server will respond with a 4
 This means "unauthorized", so if you see this, you know you need to check your authorization header.
 
 
-# Dockerized Flask Application
+# 🐋 Dockerized Flask Application
 
 This application is a simple Flask application that has been Dockerized for consistency across 
 different environments.
