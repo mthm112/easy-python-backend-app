@@ -35,29 +35,39 @@ def get_supabase_data(sql_query: str = None, table: str = "mbm_price_comparison"
         headers = {
             'apikey': supabase_key,
             'Authorization': f'Bearer {supabase_key}',
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
         }
         
+        # Clean table name (remove schema prefix if present)
+        clean_table = table.replace('public.', '').replace('`', '').replace('"', '')
+        
         # Build the REST API URL
-        url = f"{supabase_url}/rest/v1/{table}"
+        url = f"{supabase_url}/rest/v1/{clean_table}"
         
         # Add query parameters
         params = {}
         if limit:
             params['limit'] = limit
+        else:
+            # Default limit to prevent overwhelming responses
+            params['limit'] = 1000
             
-        # For simple queries, we can add some basic filtering
-        if sql_query and 'where' in sql_query.lower():
-            # This is a simplified parser - for complex queries you'd need stored procedures
-            pass
+        logger.info(f"Making request to: {url} with params: {params}")
         
         response = requests.get(url, headers=headers, params=params)
         
+        logger.info(f"Response status: {response.status_code}")
+        logger.info(f"Response headers: {dict(response.headers)}")
+        
         if response.status_code == 200:
             data = response.json()
+            logger.info(f"Received {len(data)} records from Supabase")
             return pd.DataFrame(data)
         else:
-            raise Exception(f"Supabase API error: {response.status_code} - {response.text}")
+            error_msg = f"Supabase API error: {response.status_code} - {response.text}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
             
     except Exception as e:
         logger.error(f"Supabase REST API failed: {str(e)}")
