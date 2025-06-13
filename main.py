@@ -24,13 +24,20 @@ class SQLRequest(BaseModel):
 def get_db_connection():
     """Get database connection to Supabase"""
     try:
-        return psycopg2.connect(
-            host=os.getenv('SUPABASE_HOST'),
-            port=int(os.getenv('SUPABASE_PORT', 6543)),
-            database=os.getenv('SUPABASE_DB'),
-            user=os.getenv('SUPABASE_USER'),
-            password=os.getenv('SUPABASE_PASSWORD')
-        )
+        # If using port 6543 (pooler), add options for session mode
+        connection_params = {
+            'host': os.getenv('SUPABASE_HOST'),
+            'port': int(os.getenv('SUPABASE_PORT', 6543)),
+            'database': os.getenv('SUPABASE_DB'),
+            'user': os.getenv('SUPABASE_USER'),
+            'password': os.getenv('SUPABASE_PASSWORD')
+        }
+        
+        # If using pooled connection (port 6543), add session mode
+        if int(os.getenv('SUPABASE_PORT', 6543)) == 6543:
+            connection_params['options'] = '-c default_transaction_isolation=read-committed'
+        
+        return psycopg2.connect(**connection_params)
     except Exception as e:
         logger.error(f"Database connection failed: {str(e)}")
         raise
