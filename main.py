@@ -1,12 +1,13 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 import pandas as pd
-import psycopg2
+import requests
 import os
 from datetime import datetime
 import io
 from pydantic import BaseModel
 import logging
+import json
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -21,31 +22,74 @@ app = FastAPI(
 class SQLRequest(BaseModel):
     sql_query: str
 
-def get_db_connection():
-    """Get database connection to Supabase without SSL"""
+def get_supabase_data(sql_query: str = None, table: str = "mbm_price_comparison", limit: int = None):
+    """Get data from Supabase using REST API"""
     try:
-        # Connection parameters for Supabase (SSL disabled)
-        connection_params = {
-            'host': os.getenv('SUPABASE_HOST'),
-            'port': int(os.getenv('SUPABASE_PORT', 5432)),
-            'database': os.getenv('SUPABASE_DB'),
-            'user': os.getenv('SUPABASE_USER'),
-            'password': os.getenv('SUPABASE_PASSWORD'),
-            'sslmode': 'disable'  # SSL is disabled per your Supabase config
+        # Supabase REST API configuration
+        supabase_url = os.getenv('SUPABASE_URL')  # https://your-project.supabase.co
+        supabase_key = os.getenv('SUPABASE_ANON_KEY')  # Your anon/public key
+        
+        if not supabase_url or not supabase_key:
+            raise Exception("Missing SUPABASE_URL or SUPABASE_ANON_KEY environment variables")
+        
+        headers = {
+            'apikey': supabase_key,
+            'Authorization': f'Bearer {supabase_key}',
+            'Content-Type': 'application/json'
         }
         
-        logger.info(f"Connecting to {connection_params['host']}:{connection_params['port']} as {connection_params['user']} (SSL disabled)")
+        # Build the REST API URL
+        url = f"{supabase_url}/rest/v1/{table}"
         
-        return psycopg2.connect(**connection_params)
+        # Add query parameters
+        params = {}
+        if limit:
+            params['limit'] = limit
+            
+        # For simple queries, we can add some basic filtering
+        if sql_query and 'where' in sql_query.lower():
+            # This is a simplified parser - for complex queries you'd need stored procedures
+            pass
         
+        response = requests.get(url, headers=headers, params=params)
+        
+        if response.status_code == 200:
+            data = response.json()
+            return pd.DataFrame(data)
+        else:
+            raise Exception(f"Supabase API error: {response.status_code} - {response.text}")
+            
     except Exception as e:
-        logger.error(f"Database connection failed: {str(e)}")
-        # Log connection details for debugging (without password)
-        logger.error(f"Host: {os.getenv('SUPABASE_HOST')}")
-        logger.error(f"Port: {os.getenv('SUPABASE_PORT')}")
-        logger.error(f"Database: {os.getenv('SUPABASE_DB')}")
-        logger.error(f"User: {os.getenv('SUPABASE_USER')}")
+        logger.error(f"Supabase REST API failed: {str(e)}")
         raise
+
+def parse_simple_sql(sql_query: str):
+    """Parse basic SQL queries to REST API parameters"""
+    sql_lower = sql_query.lower().strip()
+    
+    # Extract table name
+    table = "mbm_price_comparison"  # default
+    if "from" in sql_lower:
+        parts = sql_lower.split("from")
+        if len(parts) > 1:
+            table_part = parts[1].strip().split()[0]
+            if "." in table_part:
+                table = table_part.split(".")[-1]  # Get table name after schema
+            else:
+                table = table_part
+    
+    # Extract limit
+    limit = None
+    if "limit" in sql_lower:
+        limit_parts = sql_lower.split("limit")
+        if len(limit_parts) > 1:
+            limit_str = limit_parts[-1].strip().split()[0]
+            try:
+                limit = int(limit_str)
+            except ValueError:
+                pass
+    
+    return table, limit
 
 def validate_sql(sql_query: str) -> tuple[bool, str]:
     """Validate that the SQL query is safe and well-formed"""
@@ -79,79 +123,87 @@ async def health_check():
         "timestamp": datetime.now().isoformat(),
         "endpoints": [
             "/generate-csv",
-            "/analyze",
+            "/analyze", 
             "/test-db",
+            "/schema",
             "/docs"
         ]
     }
 
 @app.get("/test-db")
 async def test_database():
-    """Test database connection and verify data"""
+    """Test Supabase REST API connection"""
     try:
         # Check environment variables
-        required_vars = ['SUPABASE_HOST', 'SUPABASE_DB', 'SUPABASE_USER', 'SUPABASE_PASSWORD']
-        missing_vars = [var for var in required_vars if not os.getenv(var)]
+        supabase_url = os.getenv('SUPABASE_URL')
+        supabase_key = os.getenv('SUPABASE_ANON_KEY')
         
-        if missing_vars:
-            raise HTTPException(
-                status_code=500, 
-                detail=f"Missing environment variables: {missing_vars}"
-            )
+        if not supabase_url:
+            raise HTTPException(status_code=500, detail="Missing SUPABASE_URL environment variable")
+        if not supabase_key:
+            raise HTTPException(status_code=500, detail="Missing SUPABASE_ANON_KEY environment variable")
         
-        # Test connection
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Test query on the pricing table
-        cursor.execute("SELECT COUNT(*) FROM public.mbm_price_comparison")
-        count = cursor.fetchone()[0]
-        
-        # Get sample data structure
-        cursor.execute("SELECT * FROM public.mbm_price_comparison LIMIT 1")
-        sample = cursor.fetchone()
-        
-        # Get column names
-        cursor.execute("""
-            SELECT column_name 
-            FROM information_schema.columns 
-            WHERE table_name = 'mbm_price_comparison' 
-            AND table_schema = 'public'
-            ORDER BY ordinal_position
-        """)
-        columns = [row[0] for row in cursor.fetchall()]
-        
-        conn.close()
-        
-        return {
-            "success": True,
-            "message": "Database connection successful",
-            "table": "public.mbm_price_comparison",
-            "total_records": count,
-            "columns": columns,
-            "sample_data_exists": sample is not None,
-            "timestamp": datetime.now().isoformat()
+        # Test connection with a simple API call
+        headers = {
+            'apikey': supabase_key,
+            'Authorization': f'Bearer {supabase_key}'
         }
         
+        url = f"{supabase_url}/rest/v1/mbm_price_comparison?limit=1"
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            # Get total count
+            count_url = f"{supabase_url}/rest/v1/mbm_price_comparison?select=count"
+            count_response = requests.get(count_url, headers={**headers, 'Prefer': 'count=exact'})
+            total_count = "unknown"
+            if count_response.status_code == 200:
+                try:
+                    total_count = len(count_response.json())
+                except:
+                    pass
+            
+            return {
+                "success": True,
+                "message": "Supabase REST API connection successful",
+                "table": "mbm_price_comparison",
+                "total_records": total_count,
+                "sample_record_exists": len(data) > 0,
+                "sample_data": data[0] if len(data) > 0 else None,
+                "timestamp": datetime.now().isoformat(),
+                "supabase_url": supabase_url,
+                "connection_method": "REST API"
+            }
+        else:
+            raise HTTPException(
+                status_code=response.status_code, 
+                detail=f"Supabase API error: {response.text}"
+            )
+        
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Database test failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database test failed: {str(e)}")
 
 @app.post("/generate-csv")
 async def generate_csv(request: SQLRequest):
-    """Generate and download CSV from SQL query"""
+    """Generate and download CSV using Supabase REST API"""
     try:
         # Validate SQL
         is_valid, validation_message = validate_sql(request.sql_query)
         if not is_valid:
             raise HTTPException(status_code=400, detail=f"Invalid SQL query: {validation_message}")
         
-        logger.info(f"Executing SQL query: {request.sql_query[:100]}...")
+        logger.info(f"Executing query via REST API: {request.sql_query[:100]}...")
         
-        # Connect and execute
-        conn = get_db_connection()
-        df = pd.read_sql_query(request.sql_query, conn)
-        conn.close()
+        # Parse the SQL to extract table and limit
+        table, limit = parse_simple_sql(request.sql_query)
+        
+        # Get data using REST API
+        df = get_supabase_data(sql_query=request.sql_query, table=table, limit=limit)
         
         logger.info(f"Query returned {len(df)} rows")
         
@@ -189,19 +241,20 @@ async def generate_csv(request: SQLRequest):
 
 @app.post("/analyze")
 async def analyze_data(request: SQLRequest):
-    """Get data analysis without CSV download - useful for quick insights"""
+    """Get data analysis using Supabase REST API"""
     try:
         # Validate SQL
         is_valid, validation_message = validate_sql(request.sql_query)
         if not is_valid:
             raise HTTPException(status_code=400, detail=f"Invalid SQL query: {validation_message}")
         
-        logger.info(f"Analyzing data with query: {request.sql_query[:100]}...")
+        logger.info(f"Analyzing data via REST API: {request.sql_query[:100]}...")
         
-        # Connect and execute
-        conn = get_db_connection()
-        df = pd.read_sql_query(request.sql_query, conn)
-        conn.close()
+        # Parse the SQL to extract table and limit
+        table, limit = parse_simple_sql(request.sql_query)
+        
+        # Get data using REST API
+        df = get_supabase_data(sql_query=request.sql_query, table=table, limit=limit)
         
         logger.info(f"Analysis query returned {len(df)} rows")
         
@@ -233,43 +286,52 @@ async def analyze_data(request: SQLRequest):
 
 @app.get("/schema")
 async def get_table_schema():
-    """Get the schema information for the mbm_price_comparison table"""
+    """Get basic table info using REST API"""
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        supabase_url = os.getenv('SUPABASE_URL')
+        supabase_key = os.getenv('SUPABASE_ANON_KEY')
         
-        # Get detailed column information
-        cursor.execute("""
-            SELECT 
-                column_name,
-                data_type,
-                is_nullable,
-                column_default
-            FROM information_schema.columns 
-            WHERE table_name = 'mbm_price_comparison' 
-            AND table_schema = 'public'
-            ORDER BY ordinal_position
-        """)
+        if not supabase_url or not supabase_key:
+            raise HTTPException(status_code=500, detail="Missing Supabase configuration")
         
-        columns = []
-        for row in cursor.fetchall():
-            columns.append({
-                "name": row[0],
-                "type": row[1],
-                "nullable": row[2] == 'YES',
-                "default": row[3]
-            })
-        
-        conn.close()
-        
-        return {
-            "success": True,
-            "table": "public.mbm_price_comparison",
-            "columns": columns,
-            "column_count": len(columns),
-            "timestamp": datetime.now().isoformat()
+        headers = {
+            'apikey': supabase_key,
+            'Authorization': f'Bearer {supabase_key}'
         }
         
+        # Get a sample record to understand the structure
+        url = f"{supabase_url}/rest/v1/mbm_price_comparison?limit=1"
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data:
+                columns = list(data[0].keys())
+                return {
+                    "success": True,
+                    "table": "mbm_price_comparison",
+                    "columns": columns,
+                    "column_count": len(columns),
+                    "sample_data": data[0],
+                    "timestamp": datetime.now().isoformat(),
+                    "note": "Schema inferred from sample data via REST API"
+                }
+            else:
+                return {
+                    "success": True,
+                    "table": "mbm_price_comparison",
+                    "columns": [],
+                    "column_count": 0,
+                    "message": "Table exists but is empty"
+                }
+        else:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Failed to fetch schema: {response.text}"
+            )
+        
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Schema fetch failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Schema fetch failed: {str(e)}")
