@@ -22,22 +22,25 @@ class SQLRequest(BaseModel):
     sql_query: str
 
 def get_db_connection():
-    """Get database connection to Supabase"""
+    """Get database connection to Supabase using connection string"""
     try:
-        # If using port 6543 (pooler), add options for session mode
-        connection_params = {
-            'host': os.getenv('SUPABASE_HOST'),
-            'port': int(os.getenv('SUPABASE_PORT', 6543)),
-            'database': os.getenv('SUPABASE_DB'),
-            'user': os.getenv('SUPABASE_USER'),
-            'password': os.getenv('SUPABASE_PASSWORD')
-        }
-        
-        # If using pooled connection (port 6543), add session mode
-        if int(os.getenv('SUPABASE_PORT', 6543)) == 6543:
-            connection_params['options'] = '-c default_transaction_isolation=read-committed'
-        
-        return psycopg2.connect(**connection_params)
+        # Method 1: Try individual parameters first
+        try:
+            return psycopg2.connect(
+                host=os.getenv('SUPABASE_HOST'),
+                port=int(os.getenv('SUPABASE_PORT', 5432)),
+                database=os.getenv('SUPABASE_DB'),
+                user=os.getenv('SUPABASE_USER'),
+                password=os.getenv('SUPABASE_PASSWORD'),
+                sslmode='require'  # Add SSL requirement
+            )
+        except Exception as e1:
+            logger.warning(f"Individual parameters failed: {str(e1)}")
+            
+            # Method 2: Try connection string format
+            connection_string = f"postgresql://{os.getenv('SUPABASE_USER')}:{os.getenv('SUPABASE_PASSWORD')}@{os.getenv('SUPABASE_HOST')}:{os.getenv('SUPABASE_PORT', 5432)}/{os.getenv('SUPABASE_DB')}?sslmode=require"
+            return psycopg2.connect(connection_string)
+            
     except Exception as e:
         logger.error(f"Database connection failed: {str(e)}")
         raise
