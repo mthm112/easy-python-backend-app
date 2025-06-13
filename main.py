@@ -22,25 +22,22 @@ class SQLRequest(BaseModel):
     sql_query: str
 
 def get_db_connection():
-    """Get database connection to Supabase using connection string"""
+    """Get database connection to Supabase"""
     try:
-        # Method 1: Try individual parameters first
-        try:
-            return psycopg2.connect(
-                host=os.getenv('SUPABASE_HOST'),
-                port=int(os.getenv('SUPABASE_PORT', 5432)),
-                database=os.getenv('SUPABASE_DB'),
-                user=os.getenv('SUPABASE_USER'),
-                password=os.getenv('SUPABASE_PASSWORD'),
-                sslmode='require'  # Add SSL requirement
-            )
-        except Exception as e1:
-            logger.warning(f"Individual parameters failed: {str(e1)}")
-            
-            # Method 2: Try connection string format
-            connection_string = f"postgresql://{os.getenv('SUPABASE_USER')}:{os.getenv('SUPABASE_PASSWORD')}@{os.getenv('SUPABASE_HOST')}:{os.getenv('SUPABASE_PORT', 5432)}/{os.getenv('SUPABASE_DB')}?sslmode=require"
-            return psycopg2.connect(connection_string)
-            
+        # Try DATABASE_URL first if available
+        database_url = os.getenv('DATABASE_URL')
+        if database_url:
+            return psycopg2.connect(database_url)
+        
+        # Fallback to individual parameters
+        return psycopg2.connect(
+            host=os.getenv('SUPABASE_HOST'),
+            port=int(os.getenv('SUPABASE_PORT', 5432)),
+            database=os.getenv('SUPABASE_DB'),
+            user=os.getenv('SUPABASE_USER'),
+            password=os.getenv('SUPABASE_PASSWORD'),
+            sslmode='require'
+        )
     except Exception as e:
         logger.error(f"Database connection failed: {str(e)}")
         raise
