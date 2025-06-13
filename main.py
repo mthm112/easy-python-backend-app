@@ -22,46 +22,29 @@ class SQLRequest(BaseModel):
     sql_query: str
 
 def get_db_connection():
-    """Get database connection to Supabase"""
+    """Get database connection to Supabase without SSL"""
     try:
-        # Try DATABASE_URL first if available
-        database_url = os.getenv('DATABASE_URL')
-        if database_url:
-            logger.info("Trying DATABASE_URL connection...")
-            return psycopg2.connect(database_url)
+        # Connection parameters for Supabase (SSL disabled)
+        connection_params = {
+            'host': os.getenv('SUPABASE_HOST'),
+            'port': int(os.getenv('SUPABASE_PORT', 5432)),
+            'database': os.getenv('SUPABASE_DB'),
+            'user': os.getenv('SUPABASE_USER'),
+            'password': os.getenv('SUPABASE_PASSWORD'),
+            'sslmode': 'disable'  # SSL is disabled per your Supabase config
+        }
         
-        # Try without SSL first (for testing)
-        logger.info("Trying connection without SSL...")
-        try:
-            return psycopg2.connect(
-                host=os.getenv('SUPABASE_HOST'),
-                port=int(os.getenv('SUPABASE_PORT', 5432)),
-                database=os.getenv('SUPABASE_DB'),
-                user=os.getenv('SUPABASE_USER'),
-                password=os.getenv('SUPABASE_PASSWORD'),
-                sslmode='disable'  # Try without SSL first
-            )
-        except Exception as e1:
-            logger.warning(f"Connection without SSL failed: {str(e1)}")
-            
-            # Then try with SSL
-            logger.info("Trying connection with SSL...")
-            return psycopg2.connect(
-                host=os.getenv('SUPABASE_HOST'),
-                port=int(os.getenv('SUPABASE_PORT', 5432)),
-                database=os.getenv('SUPABASE_DB'),
-                user=os.getenv('SUPABASE_USER'),
-                password=os.getenv('SUPABASE_PASSWORD'),
-                sslmode='require'
-            )
-            
+        logger.info(f"Connecting to {connection_params['host']}:{connection_params['port']} as {connection_params['user']} (SSL disabled)")
+        
+        return psycopg2.connect(**connection_params)
+        
     except Exception as e:
         logger.error(f"Database connection failed: {str(e)}")
-        # Log all environment variables (except password) for debugging
-        logger.error(f"SUPABASE_HOST: {os.getenv('SUPABASE_HOST')}")
-        logger.error(f"SUPABASE_PORT: {os.getenv('SUPABASE_PORT')}")
-        logger.error(f"SUPABASE_DB: {os.getenv('SUPABASE_DB')}")
-        logger.error(f"SUPABASE_USER: {os.getenv('SUPABASE_USER')}")
+        # Log connection details for debugging (without password)
+        logger.error(f"Host: {os.getenv('SUPABASE_HOST')}")
+        logger.error(f"Port: {os.getenv('SUPABASE_PORT')}")
+        logger.error(f"Database: {os.getenv('SUPABASE_DB')}")
+        logger.error(f"User: {os.getenv('SUPABASE_USER')}")
         raise
 
 def validate_sql(sql_query: str) -> tuple[bool, str]:
