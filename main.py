@@ -149,41 +149,50 @@ async def test_database():
             'Authorization': f'Bearer {supabase_key}'
         }
         
-        url = f"{supabase_url}/rest/v1/mbm_price_comparison?limit=1"
-        response = requests.get(url, headers=headers)
+        # First, try to get the OpenAPI spec to see available tables
+        spec_url = f"{supabase_url}/rest/v1/"
+        spec_response = requests.get(spec_url, headers=headers)
         
-        if response.status_code == 200:
-            data = response.json()
-            
-            # Get total count
-            count_url = f"{supabase_url}/rest/v1/mbm_price_comparison?select=count"
-            count_response = requests.get(count_url, headers={**headers, 'Prefer': 'count=exact'})
-            total_count = "unknown"
-            if count_response.status_code == 200:
-                try:
-                    total_count = len(count_response.json())
-                except:
-                    pass
-            
-            return {
-                "success": True,
-                "message": "Supabase REST API connection successful",
-                "table": "mbm_price_comparison",
-                "total_records": total_count,
-                "sample_record_exists": len(data) > 0,
-                "sample_data": data[0] if len(data) > 0 else None,
-                "timestamp": datetime.now().isoformat(),
-                "supabase_url": supabase_url,
-                "connection_method": "REST API"
-            }
-        else:
-            raise HTTPException(
-                status_code=response.status_code, 
-                detail=f"Supabase API error: {response.text}"
-            )
+        available_info = {
+            "supabase_url": supabase_url,
+            "connection_method": "REST API",
+            "spec_response_status": spec_response.status_code
+        }
         
-    except HTTPException:
-        raise
+        # Try different possible table names
+        possible_tables = ["mbm_price_comparison", "mbm_pricing", "pricing", "price_comparison"]
+        
+        for table_name in possible_tables:
+            try:
+                url = f"{supabase_url}/rest/v1/{table_name}?limit=1"
+                response = requests.get(url, headers=headers)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    return {
+                        "success": True,
+                        "message": "Supabase REST API connection successful",
+                        "table": table_name,
+                        "sample_record_exists": len(data) > 0,
+                        "sample_data": data[0] if len(data) > 0 else None,
+                        "timestamp": datetime.now().isoformat(),
+                        **available_info
+                    }
+                else:
+                    available_info[f"{table_name}_error"] = f"{response.status_code}: {response.text[:100]}"
+                    
+            except Exception as e:
+                available_info[f"{table_name}_exception"] = str(e)[:100]
+        
+        # If no tables worked, return the debug info
+        return {
+            "success": False,
+            "message": "Could not find accessible tables",
+            "timestamp": datetime.now().isoformat(),
+            "debug_info": available_info,
+            "suggestion": "Check table names in Supabase dashboard and verify API permissions"
+        }
+        
     except Exception as e:
         logger.error(f"Database test failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database test failed: {str(e)}")
