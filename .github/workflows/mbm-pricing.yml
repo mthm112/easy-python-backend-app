@@ -102,19 +102,6 @@ jobs:
     needs: health-check
     if: needs.health-check.outputs.api-healthy == 'true'
     
-    strategy:
-      matrix:
-        # For manual triggers, use the selected report type
-        # For scheduled runs, generate multiple reports
-        report_type: ${{ 
-          github.event_name == 'workflow_dispatch' && 
-          fromJson(format('["{0}"]', inputs.report_type)) ||
-          (github.event_name == 'schedule' && 
-           (github.event.schedule == '0 6 * * *' && fromJson('["overpriced", "price_increase"]') ||
-            github.event.schedule == '0 8 * * 1' && fromJson('["competitive_threat", "ranking_issues"]'))) ||
-          fromJson('["overpriced"]')
-        }}
-    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -122,20 +109,20 @@ jobs:
       - name: Set up environment
         run: |
           echo "🚀 Starting MBM Pricing Analysis"
-          echo "📊 Report Type: ${{ inputs.report_type }}"
-          echo "🌐 API URL: ${{ inputs.api_base_url }}"
-          echo "📈 Include Analytics: ${{ inputs.include_analytics }}"
-          echo "☁️ Upload to Storage: ${{ inputs.upload_to_storage }}"
-          echo "🎯 Triggered by: ${{ inputs.trigger_source }}"
+          echo "📊 Report Type: ${{ inputs.report_type || 'overpriced' }}"
+          echo "🌐 API URL: ${{ inputs.api_base_url || env.DEFAULT_API_URL }}"
+          echo "📈 Include Analytics: ${{ inputs.include_analytics || 'true' }}"
+          echo "☁️ Upload to Storage: ${{ inputs.upload_to_storage || 'true' }}"
+          echo "🎯 Triggered by: ${{ inputs.trigger_source || 'unknown' }}"
           
           # Convert string inputs to boolean for API calls
-          if [ "${{ inputs.include_analytics }}" = "true" ]; then
+          if [ "${{ inputs.include_analytics || 'true' }}" = "true" ]; then
             echo "INCLUDE_ANALYTICS=true" >> $GITHUB_ENV
           else
             echo "INCLUDE_ANALYTICS=false" >> $GITHUB_ENV
           fi
           
-          if [ "${{ inputs.upload_to_storage }}" = "true" ]; then
+          if [ "${{ inputs.upload_to_storage || 'true' }}" = "true" ]; then
             echo "UPLOAD_TO_STORAGE=true" >> $GITHUB_ENV
           else
             echo "UPLOAD_TO_STORAGE=false" >> $GITHUB_ENV
@@ -144,8 +131,8 @@ jobs:
       - name: Generate Report
         id: generate
         run: |
-          API_URL="${{ inputs.api_base_url }}"
-          REPORT_TYPE="${{ inputs.report_type }}"
+          API_URL="${{ inputs.api_base_url || env.DEFAULT_API_URL }}"
+          REPORT_TYPE="${{ inputs.report_type || 'overpriced' }}"
           
           echo "📋 Generating $REPORT_TYPE report..."
           
@@ -248,10 +235,10 @@ jobs:
         if: steps.generate.outputs.success == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: mbm-report-${{ matrix.report_type }}-${{ github.run_number }}
+          name: mbm-report-${{ inputs.report_type || 'overpriced' }}-${{ github.run_number }}
           path: |
             ${{ steps.generate.outputs.filename }}
-            report_${{ matrix.report_type }}_response.json
+            report_${{ inputs.report_type || 'overpriced' }}_response.json
           retention-days: ${{ env.REPORT_RETENTION_DAYS }}
 
       - name: Create Issue on Failure
@@ -259,7 +246,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const reportType = '${{ matrix.report_type }}';
+            const reportType = '${{ inputs.report_type || 'overpriced' }}';
             const apiUrl = '${{ inputs.api_base_url || env.DEFAULT_API_URL }}';
             
             await github.rest.issues.create({
@@ -379,42 +366,3 @@ jobs:
               repo: context.repo.repo,
               body: summary
             });
-
-# Optional: Separate workflow for testing API endpoints
----
-name: Test MBM API Endpoints
-
-on:
-  workflow_dispatch:
-    inputs:
-      api_base_url:
-        description: 'API Base URL to test'
-        required: true
-        default: 'https://your-api-domain.com'
-        type: string
-
-jobs:
-  test-endpoints:
-    name: Test API Endpoints
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Test Health Endpoint
-        run: |
-          curl -f "${{ inputs.api_base_url }}/" | jq .
-
-      - name: Test Database Connection
-        run: |
-          curl -f "${{ inputs.api_base_url }}/test-db" | jq .
-
-      - name: Test Storage Connection
-        run: |
-          curl -f "${{ inputs.api_base_url }}/test-storage" | jq .
-
-      - name: Test Schema Endpoint
-        run: |
-          curl -f "${{ inputs.api_base_url }}/schema" | jq .
-
-      - name: List Available Reports
-        run: |
-          curl -f "${{ inputs.api_base_url }}/reports/list" | jq .
