@@ -1,0 +1,420 @@
+# GitHub Actions Workflow for MBM Pricing Analysis API
+name: MBM Pricing Analysis Reports
+
+on:
+  # Manual trigger with options - THIS ENABLES LOVABLE.DEV TRIGGERING
+  workflow_dispatch:
+    inputs:
+      report_type:
+        description: 'Type of report to generate'
+        required: true
+        default: 'overpriced'
+        type: choice
+        options:
+          - overpriced
+          - ranking_issues
+          - price_increase
+          - competitive_threat
+      
+      include_analytics:
+        description: 'Include analytics in the report'
+        required: false
+        default: 'true'
+        type: string
+      
+      upload_to_storage:
+        description: 'Upload report to Supabase storage'
+        required: false
+        default: 'true'
+        type: string
+      
+      api_base_url:
+        description: 'API Base URL (without trailing slash)'
+        required: false
+        default: 'https://your-api-domain.com'
+        type: string
+      
+      # Additional input for tracking the trigger source
+      trigger_source:
+        description: 'Source that triggered this workflow'
+        required: false
+        default: 'manual'
+        type: string
+
+  # Scheduled runs (optional)
+  schedule:
+    # Run daily at 6 AM UTC for overpriced products report
+    - cron: '0 6 * * *'
+    # Run weekly on Mondays at 8 AM UTC for competitive analysis
+    - cron: '0 8 * * 1'
+
+  # Can also be triggered by repository events
+  push:
+    branches: [ main ]
+    paths: 
+      - 'pricing-config/**'
+      - '.github/workflows/mbm-pricing.yml'
+
+env:
+  # Default API configuration
+  DEFAULT_API_URL: 'https://your-api-domain.com'
+  REPORT_RETENTION_DAYS: 30
+
+jobs:
+  # Health check job
+  health-check:
+    name: API Health Check
+    runs-on: ubuntu-latest
+    outputs:
+      api-healthy: ${{ steps.health.outputs.healthy }}
+      api-version: ${{ steps.health.outputs.version }}
+    
+    steps:
+      - name: Check API Health
+        id: health
+        run: |
+          API_URL="${{ inputs.api_base_url || env.DEFAULT_API_URL }}"
+          
+          echo "🔍 Checking API health at: $API_URL"
+          
+          HEALTH_RESPONSE=$(curl -s -w "%{http_code}" -o response.json "$API_URL/" || echo "000")
+          HTTP_CODE=$(echo $HEALTH_RESPONSE | tail -c 4)
+          
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ API is healthy"
+            echo "healthy=true" >> $GITHUB_OUTPUT
+            
+            # Extract version if available
+            VERSION=$(cat response.json | jq -r '.version // "unknown"')
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "🏷️ API Version: $VERSION"
+          else
+            echo "❌ API health check failed with HTTP $HTTP_CODE"
+            echo "healthy=false" >> $GITHUB_OUTPUT
+            cat response.json || echo "No response body"
+            exit 1
+          fi
+
+  # Generate single report job
+  generate-report:
+    name: Generate Report
+    runs-on: ubuntu-latest
+    needs: health-check
+    if: needs.health-check.outputs.api-healthy == 'true'
+    
+    strategy:
+      matrix:
+        # For manual triggers, use the selected report type
+        # For scheduled runs, generate multiple reports
+        report_type: ${{ 
+          github.event_name == 'workflow_dispatch' && 
+          fromJson(format('["{0}"]', inputs.report_type)) ||
+          (github.event_name == 'schedule' && 
+           (github.event.schedule == '0 6 * * *' && fromJson('["overpriced", "price_increase"]') ||
+            github.event.schedule == '0 8 * * 1' && fromJson('["competitive_threat", "ranking_issues"]'))) ||
+          fromJson('["overpriced"]')
+        }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up environment
+        run: |
+          echo "🚀 Starting MBM Pricing Analysis"
+          echo "📊 Report Type: ${{ inputs.report_type }}"
+          echo "🌐 API URL: ${{ inputs.api_base_url }}"
+          echo "📈 Include Analytics: ${{ inputs.include_analytics }}"
+          echo "☁️ Upload to Storage: ${{ inputs.upload_to_storage }}"
+          echo "🎯 Triggered by: ${{ inputs.trigger_source }}"
+          
+          # Convert string inputs to boolean for API calls
+          if [ "${{ inputs.include_analytics }}" = "true" ]; then
+            echo "INCLUDE_ANALYTICS=true" >> $GITHUB_ENV
+          else
+            echo "INCLUDE_ANALYTICS=false" >> $GITHUB_ENV
+          fi
+          
+          if [ "${{ inputs.upload_to_storage }}" = "true" ]; then
+            echo "UPLOAD_TO_STORAGE=true" >> $GITHUB_ENV
+          else
+            echo "UPLOAD_TO_STORAGE=false" >> $GITHUB_ENV
+          fi
+
+      - name: Generate Report
+        id: generate
+        run: |
+          API_URL="${{ inputs.api_base_url }}"
+          REPORT_TYPE="${{ inputs.report_type }}"
+          
+          echo "📋 Generating $REPORT_TYPE report..."
+          
+          # Construct API request URL
+          REQUEST_URL="$API_URL/generate-report/$REPORT_TYPE?include_analytics=$INCLUDE_ANALYTICS&upload_to_storage=$UPLOAD_TO_STORAGE"
+          
+          echo "🔗 Request URL: $REQUEST_URL"
+          
+          # Make API request with timeout and better error handling
+          echo "⏳ Calling MBM Pricing API..."
+          RESPONSE=$(curl -s -w "%{http_code}" -o report_response.json \
+            --max-time 300 \
+            --retry 3 \
+            --retry-delay 5 \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "User-Agent: GitHub-Actions-MBM-Pricing" \
+            "$REQUEST_URL" || echo "000")
+          
+          HTTP_CODE=$(echo $RESPONSE | tail -c 4)
+          
+          echo "📡 API Response Code: $HTTP_CODE"
+          
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Report generated successfully"
+            
+            # Extract and validate report details
+            if [ -f "report_response.json" ]; then
+              ROW_COUNT=$(cat report_response.json | jq -r '.row_count // 0')
+              FILENAME=$(cat report_response.json | jq -r '.filename // "unknown"')
+              PUBLIC_URL=$(cat report_response.json | jq -r '.storage_upload.public_url // ""')
+              REPORT_NAME=$(cat report_response.json | jq -r '.report_name // "Unknown Report"')
+              SUCCESS=$(cat report_response.json | jq -r '.success // false')
+              
+              if [ "$SUCCESS" = "true" ]; then
+                echo "📊 Rows: $ROW_COUNT"
+                echo "📁 Filename: $FILENAME"
+                echo "🔗 Public URL: $PUBLIC_URL"
+                echo "📋 Report: $REPORT_NAME"
+                
+                # Set outputs for next steps
+                echo "success=true" >> $GITHUB_OUTPUT
+                echo "row_count=$ROW_COUNT" >> $GITHUB_OUTPUT
+                echo "filename=$FILENAME" >> $GITHUB_OUTPUT
+                echo "public_url=$PUBLIC_URL" >> $GITHUB_OUTPUT
+                echo "report_name=$REPORT_NAME" >> $GITHUB_OUTPUT
+                
+                # Save response for artifacts
+                cp report_response.json "report_${REPORT_TYPE}_response.json"
+              else
+                echo "❌ API returned success=false"
+                cat report_response.json
+                exit 1
+              fi
+            else
+              echo "❌ No response file generated"
+              exit 1
+            fi
+          else
+            echo "❌ Report generation failed with HTTP $HTTP_CODE"
+            echo "📄 Response body:"
+            cat report_response.json || echo "No response body available"
+            
+            # Try to extract error message
+            if [ -f "report_response.json" ]; then
+              ERROR_MSG=$(cat report_response.json | jq -r '.error // .detail // "Unknown error"')
+              echo "🚨 Error: $ERROR_MSG"
+            fi
+            
+            echo "success=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Download Report File (if uploaded to storage)
+        if: steps.generate.outputs.success == 'true' && steps.generate.outputs.public_url != ''
+        run: |
+          PUBLIC_URL="${{ steps.generate.outputs.public_url }}"
+          FILENAME="${{ steps.generate.outputs.filename }}"
+          
+          if [ -n "$PUBLIC_URL" ] && [ "$PUBLIC_URL" != "null" ]; then
+            echo "📥 Downloading report from: $PUBLIC_URL"
+            
+            curl -s -L -o "$FILENAME" "$PUBLIC_URL"
+            
+            if [ -f "$FILENAME" ]; then
+              FILE_SIZE=$(stat -c%s "$FILENAME" 2>/dev/null || stat -f%z "$FILENAME" 2>/dev/null || echo "unknown")
+              echo "✅ Downloaded $FILENAME ($FILE_SIZE bytes)"
+              
+              # Show first few lines of CSV for verification
+              echo "📄 File preview:"
+              head -10 "$FILENAME" || echo "Could not preview file"
+            else
+              echo "❌ Failed to download file"
+            fi
+          else
+            echo "ℹ️ No public URL available for download"
+          fi
+
+      - name: Upload Report as GitHub Artifact
+        if: steps.generate.outputs.success == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mbm-report-${{ matrix.report_type }}-${{ github.run_number }}
+          path: |
+            ${{ steps.generate.outputs.filename }}
+            report_${{ matrix.report_type }}_response.json
+          retention-days: ${{ env.REPORT_RETENTION_DAYS }}
+
+      - name: Create Issue on Failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const reportType = '${{ matrix.report_type }}';
+            const apiUrl = '${{ inputs.api_base_url || env.DEFAULT_API_URL }}';
+            
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `❌ MBM Pricing Report Generation Failed: ${reportType}`,
+              body: `
+              ## Report Generation Failure
+              
+              **Report Type:** \`${reportType}\`
+              **API URL:** \`${apiUrl}\`
+              **Workflow Run:** [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+              **Triggered by:** ${{ github.event_name }}
+              **Time:** ${{ github.event.head_commit.timestamp || 'N/A' }}
+              
+              ## Investigation Steps
+              - [ ] Check API health: \`${apiUrl}/\`
+              - [ ] Verify database connectivity: \`${apiUrl}/test-db\`
+              - [ ] Check storage configuration: \`${apiUrl}/test-storage\`
+              - [ ] Review workflow logs
+              
+              ## Auto-generated issue
+              This issue was automatically created by the MBM Pricing Analysis workflow.
+              `,
+              labels: ['bug', 'automated', 'pricing-analysis']
+            });
+
+  # Summary job that runs after all reports
+  summary:
+    name: Generate Summary
+    runs-on: ubuntu-latest
+    needs: [health-check, generate-report]
+    if: always() && needs.health-check.outputs.api-healthy == 'true'
+    
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./reports
+
+      - name: Generate Summary Report
+        run: |
+          echo "# MBM Pricing Analysis Summary" > summary.md
+          echo "**Generated:** $(date)" >> summary.md
+          echo "**Workflow:** ${{ github.workflow }}" >> summary.md
+          echo "**Run:** #${{ github.run_number }}" >> summary.md
+          echo "**API Version:** ${{ needs.health-check.outputs.api-version }}" >> summary.md
+          echo "" >> summary.md
+          
+          echo "## Reports Generated" >> summary.md
+          
+          # Count successful and failed jobs
+          SUCCESS_COUNT=0
+          TOTAL_COUNT=0
+          
+          for report_dir in ./reports/*/; do
+            if [ -d "$report_dir" ]; then
+              TOTAL_COUNT=$((TOTAL_COUNT + 1))
+              
+              REPORT_NAME=$(basename "$report_dir")
+              
+              # Check for response JSON
+              if ls "$report_dir"*.json 1> /dev/null 2>&1; then
+                RESPONSE_FILE=$(ls "$report_dir"*.json | head -1)
+                
+                if [ -f "$RESPONSE_FILE" ]; then
+                  ROW_COUNT=$(cat "$RESPONSE_FILE" | jq -r '.row_count // 0')
+                  REPORT_TITLE=$(cat "$RESPONSE_FILE" | jq -r '.report_name // "Unknown"')
+                  PUBLIC_URL=$(cat "$RESPONSE_FILE" | jq -r '.storage_upload.public_url // ""')
+                  
+                  echo "### ✅ $REPORT_TITLE" >> summary.md
+                  echo "- **Rows:** $ROW_COUNT" >> summary.md
+                  echo "- **Artifact:** \`$REPORT_NAME\`" >> summary.md
+                  
+                  if [ -n "$PUBLIC_URL" ] && [ "$PUBLIC_URL" != "null" ]; then
+                    echo "- **Download:** [$PUBLIC_URL]($PUBLIC_URL)" >> summary.md
+                  fi
+                  
+                  echo "" >> summary.md
+                  SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+                fi
+              fi
+            fi
+          done
+          
+          echo "## Summary Statistics" >> summary.md
+          echo "- **Total Reports:** $TOTAL_COUNT" >> summary.md
+          echo "- **Successful:** $SUCCESS_COUNT" >> summary.md
+          echo "- **Failed:** $((TOTAL_COUNT - SUCCESS_COUNT))" >> summary.md
+          
+          if [ $SUCCESS_COUNT -eq $TOTAL_COUNT ] && [ $TOTAL_COUNT -gt 0 ]; then
+            echo "- **Status:** 🎉 All reports generated successfully!" >> summary.md
+          elif [ $SUCCESS_COUNT -gt 0 ]; then
+            echo "- **Status:** ⚠️ Some reports failed to generate" >> summary.md
+          else
+            echo "- **Status:** ❌ All reports failed to generate" >> summary.md
+          fi
+
+      - name: Upload Summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: mbm-summary-${{ github.run_number }}
+          path: summary.md
+          retention-days: ${{ env.REPORT_RETENTION_DAYS }}
+
+      - name: Comment Summary on PR (if applicable)
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const summary = fs.readFileSync('summary.md', 'utf8');
+            
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: summary
+            });
+
+# Optional: Separate workflow for testing API endpoints
+---
+name: Test MBM API Endpoints
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: 'API Base URL to test'
+        required: true
+        default: 'https://your-api-domain.com'
+        type: string
+
+jobs:
+  test-endpoints:
+    name: Test API Endpoints
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Test Health Endpoint
+        run: |
+          curl -f "${{ inputs.api_base_url }}/" | jq .
+
+      - name: Test Database Connection
+        run: |
+          curl -f "${{ inputs.api_base_url }}/test-db" | jq .
+
+      - name: Test Storage Connection
+        run: |
+          curl -f "${{ inputs.api_base_url }}/test-storage" | jq .
+
+      - name: Test Schema Endpoint
+        run: |
+          curl -f "${{ inputs.api_base_url }}/schema" | jq .
+
+      - name: List Available Reports
+        run: |
+          curl -f "${{ inputs.api_base_url }}/reports/list" | jq .
