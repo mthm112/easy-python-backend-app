@@ -4,3 +4,4 @@ pandas>=2.2.0
 requests>=2.31.0
 pydantic>=2.5.0
 psycopg2-binary>=2.9.7
+tenacity>=8.2.0
