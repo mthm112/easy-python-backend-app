@@ -301,70 +301,308 @@ class SupabaseStorage:
 
 REPORT_CONFIGS = {
     "overpriced": {
-        "name": "Overpriced Products Report",
-        "description": "Products where MBM is more expensive than competitors",
+        "name": "Strategic Overpriced Products Report",
+        "description": "Products where MBM is overpriced with optimization recommendations",
         "sql": '''
-            SELECT "Product ID", "Product Name", "Brand", "Category", "Sub-Category", 
-                   "Seller Name", 
-                   ROUND("Your Price"::numeric/100, 2) as mbm_price_pounds,
-                   ROUND("Seller Total Price"::numeric/100, 2) as competitor_price_pounds,
-                   ROUND("Price Difference"::numeric/100, 2) as overpricing_pounds,
-                   "Your Price Rank", "Competitor Price Rank"
+            SELECT 
+                "Product ID", 
+                "Product Name", 
+                "Brand", 
+                "Category", 
+                "Sub-Category", 
+                "Seller Name",
+                
+                -- Current pricing in pounds
+                ROUND("Your Price"::numeric/100, 2) as mbm_price_pounds,
+                ROUND("Seller Total Price"::numeric/100, 2) as competitor_price_pounds,
+                ROUND("Price Difference"::numeric/100, 2) as overpricing_pounds,
+                
+                -- Percentage overpricing for better context
+                CASE 
+                    WHEN "Seller Total Price" > 0 THEN 
+                        ROUND(("Price Difference"::numeric / "Seller Total Price"::numeric) * 100, 1)
+                    ELSE 0 
+                END as overpricing_percentage,
+                
+                -- Strategic pricing recommendations
+                ROUND("Seller Total Price"::numeric/100, 2) as match_competitor_price,
+                ROUND(("Seller Total Price"::numeric * 0.99)/100, 2) as beat_by_1_percent_price,
+                ROUND(("Seller Total Price"::numeric * 0.95)/100, 2) as beat_by_5_percent_price,
+                ROUND((("Your Price"::numeric + "Seller Total Price"::numeric) / 2)/100, 2) as split_difference_price,
+                
+                -- Revenue impact calculations
+                ROUND(("Your Price"::numeric - "Seller Total Price"::numeric)/100, 2) as revenue_loss_per_unit,
+                
+                -- Priority scoring
+                CASE 
+                    WHEN "Price Difference" >= 1000 THEN 'CRITICAL'
+                    WHEN "Price Difference" >= 500 THEN 'HIGH'
+                    WHEN "Price Difference" >= 100 THEN 'MEDIUM'
+                    ELSE 'LOW'
+                END as priority_level,
+                
+                -- Competitive position analysis
+                "Your Price Rank", 
+                "Competitor Price Rank",
+                CASE 
+                    WHEN "Your Price Rank" = 1 THEN 'Leading but overpriced'
+                    WHEN "Your Price Rank" <= 3 THEN 'Top 3 but overpriced'
+                    WHEN "Your Price Rank" <= 5 THEN 'Top 5 but overpriced'
+                    ELSE 'Poor ranking and overpriced'
+                END as competitive_position,
+                
+                -- Market opportunity assessment
+                CASE 
+                    WHEN "Price Difference" >= 500 AND "Your Price Rank" <= 3 THEN 'Quick Win - High Impact'
+                    WHEN "Price Difference" >= 100 AND "Your Price Rank" <= 5 THEN 'Standard Opportunity'
+                    WHEN "Price Difference" < 100 THEN 'Minor Adjustment'
+                    ELSE 'Review Required'
+                END as opportunity_type,
+                
+                "Product URL"
+
             FROM public.mbm_price_comparison 
             WHERE "Price Difference" > 0 
-            ORDER BY "Price Difference" DESC
+            ORDER BY 
+                CASE 
+                    WHEN "Price Difference" >= 500 AND "Your Price Rank" <= 3 THEN 1
+                    WHEN "Price Difference" >= 100 AND "Your Price Rank" <= 5 THEN 2
+                    ELSE 3
+                END,
+                "Price Difference" DESC
         ''',
-        "business_value": "Immediate revenue protection opportunities"
+        "business_value": "Immediate revenue protection with strategic pricing guidance"
     },
+    
     "ranking_issues": {
-        "name": "Ranking Issues Report", 
-        "description": "Products with good pricing but poor search visibility",
+        "name": "SEO & Visibility Optimization Report", 
+        "description": "Products with competitive pricing but poor search visibility requiring SEO attention",
         "sql": '''
-            SELECT "Product ID", "Product Name", "Category", "Sub-Category",
-                   "Seller Name",
-                   ROUND("Your Price"::numeric/100, 2) as mbm_price_pounds,
-                   ROUND("Seller Total Price"::numeric/100, 2) as competitor_price_pounds,
-                   ROUND(ABS("Price Difference")::numeric/100, 2) as price_advantage_pounds,
-                   "Your Price Rank", "Competitor Price Rank",
-                   ("Your Price Rank" - "Competitor Price Rank") as ranking_gap
+            SELECT 
+                "Product ID", 
+                "Product Name", 
+                "Brand",
+                "Category", 
+                "Sub-Category",
+                "Seller Name",
+                
+                -- Pricing advantage
+                ROUND("Your Price"::numeric/100, 2) as mbm_price_pounds,
+                ROUND("Seller Total Price"::numeric/100, 2) as competitor_price_pounds,
+                ROUND(ABS("Price Difference")::numeric/100, 2) as price_advantage_pounds,
+                
+                -- Percentage price advantage
+                CASE 
+                    WHEN "Your Price" > 0 THEN 
+                        ROUND((ABS("Price Difference")::numeric / "Your Price"::numeric) * 100, 1)
+                    ELSE 0 
+                END as price_advantage_percentage,
+                
+                -- Ranking analysis
+                "Your Price Rank", 
+                "Competitor Price Rank",
+                ("Your Price Rank" - "Competitor Price Rank") as ranking_gap,
+                
+                -- Visibility impact assessment
+                CASE 
+                    WHEN ("Your Price Rank" - "Competitor Price Rank") >= 10 THEN 'CRITICAL - Major visibility loss'
+                    WHEN ("Your Price Rank" - "Competitor Price Rank") >= 6 THEN 'HIGH - Significant gap'
+                    WHEN ("Your Price Rank" - "Competitor Price Rank") >= 3 THEN 'MEDIUM - Notable difference'
+                    ELSE 'LOW - Minor gap'
+                END as visibility_impact,
+                
+                -- Revenue opportunity from better ranking
+                CASE 
+                    WHEN ("Your Price Rank" - "Competitor Price Rank") >= 10 THEN 'High Revenue Potential'
+                    WHEN ("Your Price Rank" - "Competitor Price Rank") >= 6 THEN 'Medium Revenue Potential'
+                    WHEN ("Your Price Rank" - "Competitor Price Rank") >= 3 THEN 'Standard Revenue Potential'
+                    ELSE 'Low Revenue Potential'
+                END as revenue_opportunity,
+                
+                -- Action recommendations
+                CASE 
+                    WHEN ("Your Price Rank" - "Competitor Price Rank") >= 10 AND ABS("Price Difference") >= 100 THEN 'Urgent SEO + Marketing Focus'
+                    WHEN ("Your Price Rank" - "Competitor Price Rank") >= 6 THEN 'SEO Optimization Required'
+                    WHEN ("Your Price Rank" - "Competitor Price Rank") >= 3 THEN 'Monitor and Optimize'
+                    ELSE 'Standard Monitoring'
+                END as recommended_action,
+                
+                -- Lost traffic estimate (theoretical)
+                CASE 
+                    WHEN ("Your Price Rank" - "Competitor Price Rank") >= 10 THEN 'High traffic loss'
+                    WHEN ("Your Price Rank" - "Competitor Price Rank") >= 6 THEN 'Medium traffic loss'
+                    ELSE 'Low traffic loss'
+                END as estimated_traffic_impact,
+                
+                "Product URL"
+
             FROM public.mbm_price_comparison 
             WHERE "Price Difference" < 0 AND "Your Price Rank" > "Competitor Price Rank"
-            ORDER BY ("Your Price Rank" - "Competitor Price Rank") DESC
+            ORDER BY 
+                ("Your Price Rank" - "Competitor Price Rank") DESC,
+                ABS("Price Difference") DESC
         ''',
-        "business_value": "SEO/visibility optimization opportunities"
+        "business_value": "SEO/visibility optimization with quantified revenue impact"
     },
+    
     "price_increase": {
-        "name": "Price Increase Opportunities",
-        "description": "Products where MBM can safely increase prices",
+        "name": "Margin Improvement Opportunities",
+        "description": "Products where MBM can safely increase prices to maximize profitability",
         "sql": '''
-            SELECT "Product ID", "Product Name", "Brand", "Category", "Sub-Category",
-                   "Seller Name",
-                   ROUND("Your Price"::numeric/100, 2) as current_mbm_price,
-                   ROUND("Seller Total Price"::numeric/100, 2) as competitor_price,
-                   ROUND(ABS("Price Difference")::numeric/100, 2) as potential_increase,
-                   "Your Price Rank", "Competitor Price Rank"
+            SELECT 
+                "Product ID", 
+                "Product Name", 
+                "Brand", 
+                "Category", 
+                "Sub-Category",
+                "Seller Name",
+                
+                -- Current pricing
+                ROUND("Your Price"::numeric/100, 2) as current_mbm_price,
+                ROUND("Seller Total Price"::numeric/100, 2) as competitor_price,
+                ROUND(ABS("Price Difference")::numeric/100, 2) as potential_increase_pounds,
+                
+                -- Percentage increase potential
+                CASE 
+                    WHEN "Your Price" > 0 THEN 
+                        ROUND((ABS("Price Difference")::numeric / "Your Price"::numeric) * 100, 1)
+                    ELSE 0 
+                END as potential_increase_percentage,
+                
+                -- Strategic pricing recommendations
+                ROUND(("Seller Total Price"::numeric * 0.95)/100, 2) as conservative_increase_price,
+                ROUND(("Seller Total Price"::numeric * 0.90)/100, 2) as moderate_increase_price,
+                ROUND(("Seller Total Price"::numeric * 0.85)/100, 2) as aggressive_increase_price,
+                
+                -- Revenue impact projections
+                ROUND((("Seller Total Price"::numeric * 0.95) - "Your Price"::numeric)/100, 2) as conservative_revenue_gain,
+                ROUND((("Seller Total Price"::numeric * 0.90) - "Your Price"::numeric)/100, 2) as moderate_revenue_gain,
+                ROUND((("Seller Total Price"::numeric * 0.85) - "Your Price"::numeric)/100, 2) as aggressive_revenue_gain,
+                
+                -- Risk assessment
+                CASE 
+                    WHEN ABS("Price Difference") >= 500 THEN 'LOW RISK - Large margin'
+                    WHEN ABS("Price Difference") >= 200 THEN 'MEDIUM RISK - Moderate margin'
+                    WHEN ABS("Price Difference") >= 100 THEN 'HIGHER RISK - Small margin'
+                    ELSE 'HIGH RISK - Minimal margin'
+                END as price_increase_risk,
+                
+                -- Market position after increase
+                "Your Price Rank", 
+                "Competitor Price Rank",
+                
+                -- Opportunity classification
+                CASE 
+                    WHEN ABS("Price Difference") >= 500 AND "Your Price Rank" <= 2 THEN 'Premium Opportunity'
+                    WHEN ABS("Price Difference") >= 200 AND "Your Price Rank" <= 3 THEN 'Standard Opportunity'
+                    WHEN ABS("Price Difference") >= 100 THEN 'Careful Opportunity'
+                    ELSE 'Monitor Only'
+                END as opportunity_class,
+                
+                -- Implementation priority
+                CASE 
+                    WHEN ABS("Price Difference") >= 500 THEN 'IMMEDIATE'
+                    WHEN ABS("Price Difference") >= 200 THEN 'HIGH'
+                    WHEN ABS("Price Difference") >= 100 THEN 'MEDIUM'
+                    ELSE 'LOW'
+                END as implementation_priority,
+                
+                "Product URL"
+
             FROM public.mbm_price_comparison 
             WHERE "Price Difference" < -50
-            ORDER BY ABS("Price Difference") DESC
+            ORDER BY 
+                ABS("Price Difference") DESC,
+                "Your Price Rank" ASC
         ''',
-        "business_value": "Margin improvement without losing competitiveness"
+        "business_value": "Margin improvement with risk-assessed pricing strategies"
     },
+    
     "competitive_threat": {
-        "name": "Competitive Threat Analysis",
-        "description": "Category-level competitive intelligence",
+        "name": "Strategic Competitive Intelligence",
+        "description": "Comprehensive competitor analysis with market positioning insights",
         "sql": '''
-            SELECT "Category", "Seller Name",
-                   COUNT(*) as products_compared,
-                   COUNT(CASE WHEN "Price Difference" > 0 THEN 1 END) as they_beat_us,
-                   COUNT(CASE WHEN "Price Difference" < 0 THEN 1 END) as we_beat_them,
-                   ROUND(AVG("Price Difference"::numeric)/100, 2) as avg_difference_pounds,
-                   ROUND(AVG(CASE WHEN "Price Difference" > 0 THEN "Price Difference" END)::numeric/100, 2) as avg_we_lose_by
+            SELECT 
+                COALESCE(NULLIF("Category", 'NA'), 'Uncategorized') as category,
+                "Seller Name" as competitor,
+                COUNT(*) as products_compared,
+                COUNT(CASE WHEN "Price Difference" > 0 THEN 1 END) as they_beat_us_count,
+                COUNT(CASE WHEN "Price Difference" < 0 THEN 1 END) as we_beat_them_count,
+                COUNT(CASE WHEN "Price Difference" = 0 THEN 1 END) as price_matches,
+                
+                -- Win rate analysis
+                ROUND((COUNT(CASE WHEN "Price Difference" > 0 THEN 1 END)::numeric / COUNT(*)) * 100, 1) as their_win_rate_percent,
+                ROUND((COUNT(CASE WHEN "Price Difference" < 0 THEN 1 END)::numeric / COUNT(*)) * 100, 1) as our_win_rate_percent,
+                
+                -- Financial impact
+                ROUND(AVG("Price Difference"::numeric)/100, 2) as avg_difference_pounds,
+                ROUND(AVG(CASE WHEN "Price Difference" > 0 THEN "Price Difference" END)::numeric/100, 2) as avg_we_lose_by,
+                ROUND(AVG(CASE WHEN "Price Difference" < 0 THEN ABS("Price Difference") END)::numeric/100, 2) as avg_we_win_by,
+                ROUND(SUM(CASE WHEN "Price Difference" > 0 THEN "Price Difference" ELSE 0 END)::numeric/100, 2) as total_revenue_loss,
+                ROUND(SUM(CASE WHEN "Price Difference" < 0 THEN ABS("Price Difference") ELSE 0 END)::numeric/100, 2) as total_revenue_advantage,
+                
+                -- Net competitive position
+                ROUND((SUM(CASE WHEN "Price Difference" < 0 THEN ABS("Price Difference") ELSE 0 END)::numeric - 
+                       SUM(CASE WHEN "Price Difference" > 0 THEN "Price Difference" ELSE 0 END)::numeric)/100, 2) as net_revenue_impact,
+                
+                -- Threat level assessment
+                CASE 
+                    WHEN (COUNT(CASE WHEN "Price Difference" > 0 THEN 1 END)::numeric / COUNT(*)) * 100 >= 70 THEN 'CRITICAL THREAT'
+                    WHEN (COUNT(CASE WHEN "Price Difference" > 0 THEN 1 END)::numeric / COUNT(*)) * 100 >= 50 THEN 'HIGH THREAT'
+                    WHEN (COUNT(CASE WHEN "Price Difference" > 0 THEN 1 END)::numeric / COUNT(*)) * 100 >= 30 THEN 'MODERATE THREAT'
+                    ELSE 'LOW THREAT'
+                END as threat_level,
+                
+                -- Strategic priority
+                CASE 
+                    WHEN (COUNT(CASE WHEN "Price Difference" > 0 THEN 1 END)::numeric / COUNT(*)) * 100 >= 60 
+                         AND SUM(CASE WHEN "Price Difference" > 0 THEN "Price Difference" ELSE 0 END) >= 5000 THEN 'URGENT ACTION'
+                    WHEN (COUNT(CASE WHEN "Price Difference" > 0 THEN 1 END)::numeric / COUNT(*)) * 100 >= 50 
+                         AND SUM(CASE WHEN "Price Difference" > 0 THEN "Price Difference" ELSE 0 END) >= 2000 THEN 'HIGH PRIORITY'
+                    WHEN (COUNT(CASE WHEN "Price Difference" > 0 THEN 1 END)::numeric / COUNT(*)) * 100 >= 40 THEN 'MONITOR CLOSELY'
+                    ELSE 'STANDARD MONITORING'
+                END as strategic_priority,
+                
+                -- Market position
+                CASE 
+                    WHEN (COUNT(CASE WHEN "Price Difference" < 0 THEN 1 END)::numeric / COUNT(*)) * 100 >= 60 THEN 'MARKET LEADER'
+                    WHEN (COUNT(CASE WHEN "Price Difference" < 0 THEN 1 END)::numeric / COUNT(*)) * 100 >= 40 THEN 'COMPETITIVE'
+                    WHEN (COUNT(CASE WHEN "Price Difference" < 0 THEN 1 END)::numeric / COUNT(*)) * 100 >= 20 THEN 'CHALLENGING'
+                    ELSE 'STRUGGLING'
+                END as market_position,
+                
+                -- Ranking performance
+                ROUND(AVG("Your Price Rank"::numeric), 1) as avg_our_rank,
+                ROUND(AVG("Competitor Price Rank"::numeric), 1) as avg_their_rank,
+                ROUND((AVG("Your Price Rank"::numeric) - AVG("Competitor Price Rank"::numeric)), 1) as avg_ranking_gap,
+                
+                -- Opportunity assessment
+                CASE 
+                    WHEN (COUNT(CASE WHEN "Price Difference" < 0 THEN 1 END)::numeric / COUNT(*)) * 100 >= 50 
+                         AND AVG("Your Price Rank"::numeric) > AVG("Competitor Price Rank"::numeric) THEN 'SEO/Visibility Focus'
+                    WHEN (COUNT(CASE WHEN "Price Difference" > 0 THEN 1 END)::numeric / COUNT(*)) * 100 >= 50 
+                         AND SUM(CASE WHEN "Price Difference" > 0 THEN "Price Difference" ELSE 0 END) >= 2000 THEN 'Pricing Strategy Review'
+                    WHEN (COUNT(CASE WHEN "Price Difference" > 0 THEN 1 END)::numeric / COUNT(*)) * 100 >= 60 THEN 'Comprehensive Strategy Needed'
+                    ELSE 'Maintain Current Strategy'
+                END as recommended_strategy
+
             FROM public.mbm_price_comparison 
+            WHERE "Seller Name" IS NOT NULL
             GROUP BY "Category", "Seller Name"
             HAVING COUNT(*) >= 5
-            ORDER BY they_beat_us DESC, avg_we_lose_by DESC
+            ORDER BY 
+                CASE 
+                    WHEN (COUNT(CASE WHEN "Price Difference" > 0 THEN 1 END)::numeric / COUNT(*)) * 100 >= 60 
+                         AND SUM(CASE WHEN "Price Difference" > 0 THEN "Price Difference" ELSE 0 END) >= 5000 THEN 1
+                    WHEN (COUNT(CASE WHEN "Price Difference" > 0 THEN 1 END)::numeric / COUNT(*)) * 100 >= 50 
+                         AND SUM(CASE WHEN "Price Difference" > 0 THEN "Price Difference" ELSE 0 END) >= 2000 THEN 2
+                    WHEN (COUNT(CASE WHEN "Price Difference" > 0 THEN 1 END)::numeric / COUNT(*)) * 100 >= 50 THEN 3
+                    ELSE 4
+                END,
+                SUM(CASE WHEN "Price Difference" > 0 THEN "Price Difference" ELSE 0 END) DESC,
+                COUNT(CASE WHEN "Price Difference" > 0 THEN 1 END) DESC
         ''',
-        "business_value": "Strategic competitive positioning insights"
+        "business_value": "Strategic competitive positioning with actionable intelligence and revenue impact analysis"
     }
 }
 
