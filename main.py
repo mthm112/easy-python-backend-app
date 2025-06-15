@@ -1,8 +1,3 @@
-#!/usr/bin/env python3
-"""
-MBM Pricing Analysis API with Supabase Storage Integration
-"""
-
 import os
 import time
 import io
