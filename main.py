@@ -31,7 +31,6 @@ class ReportRequest(BaseModel):
     include_analytics: bool = True
     upload_to_storage: bool = True
 
-# Supabase Storage Class (adapted from your working implementation)
 class SupabaseStorage:
     """Supabase storage operations for MBM reports"""
 
@@ -69,20 +68,27 @@ class SupabaseStorage:
         return default_url
 
     def create_bucket_if_not_exists(self) -> bool:
-        """Check if bucket exists; if not, provide helpful error message"""
+        """Check if bucket exists using the correct API format"""
         if not self.enabled or not self.anon_key or not self.rest_url:
             logger.debug("Storage uploads disabled or missing credentials.")
             return False
         
         try:
-            # Test bucket access by trying to list objects
-            test_url = f"{self.rest_url}/storage/v1/object/list/{self.bucket_name}?limit=1"
+            # Test bucket access by trying to list objects with correct format
+            test_url = f"{self.rest_url}/storage/v1/object/list/{self.bucket_name}"
             headers = {
                 "apikey": self.anon_key,
-                "Authorization": f"Bearer {self.anon_key}"
+                "Authorization": f"Bearer {self.anon_key}",
+                "Content-Type": "application/json"
             }
             
-            response = requests.post(test_url, headers=headers, json={}, timeout=10)
+            # Use the correct body format with required 'prefix' property
+            body = {
+                "limit": 1,
+                "prefix": ""  # Empty prefix to list any files
+            }
+            
+            response = requests.post(test_url, headers=headers, json=body, timeout=10)
             
             if response.status_code == 200:
                 logger.info(f"Bucket '{self.bucket_name}' is accessible")
@@ -92,11 +98,111 @@ class SupabaseStorage:
                 return False
             else:
                 logger.warning(f"Bucket check returned {response.status_code}: {response.text}")
-                return True  # Assume it exists and try upload anyway
+                # If it's not a clear 404, assume bucket exists and try upload anyway
+                return True
                 
         except Exception as e:
             logger.warning(f"Could not verify bucket existence: {str(e)}. Proceeding with upload attempt.")
             return True
+
+    def upload_file_content(self, file_content: str, file_name: str, content_type: str = "text/csv") -> Optional[str]:
+        """Upload file content to Supabase storage and return public URL"""
+        if not self.enabled:
+            logger.debug("Storage uploads are disabled. Skipping upload.")
+            return None
+        if not self.anon_key:
+            logger.warning("SUPABASE_ANON_KEY not set. Skipping upload.")
+            return None
+        if not self.rest_url:
+            logger.error("Could not determine Supabase URL. Cannot upload file.")
+            return None
+            
+        if not self.create_bucket_if_not_exists():
+            logger.error(f"Failed to verify bucket '{self.bucket_name}'. Cannot upload file.")
+            return None
+
+        try:
+            # Convert string content to bytes
+            file_data = file_content.encode('utf-8')
+
+            upload_url = f"{self.rest_url}/storage/v1/object/{self.bucket_name}/{file_name}"
+            
+            # Debug logging
+            logger.debug(f"REST URL: {self.rest_url}")
+            logger.debug(f"Bucket name: {self.bucket_name}")
+            logger.debug(f"Full upload URL: {upload_url}")
+            logger.info(f"Uploading file: {file_name} ({len(file_data)} bytes)")
+            
+            headers = {
+                "apikey": self.anon_key,
+                "Authorization": f"Bearer {self.anon_key}",
+                "Content-Type": content_type
+            }
+            
+            response = requests.post(upload_url, headers=headers, data=file_data, timeout=30)
+            
+            logger.info(f"Upload response: {response.status_code}")
+            if response.text:
+                logger.debug(f"Upload response body: {response.text[:200]}")
+            
+            if response.status_code in [200, 201]:
+                public_url = f"{self.rest_url}/storage/v1/object/public/{self.bucket_name}/{file_name}"
+                logger.info(f"Successfully uploaded {file_name} to bucket '{self.bucket_name}'")
+                logger.info(f"Public URL: {public_url}")
+                return public_url
+            else:
+                logger.error(f"Upload failed with status {response.status_code}: {response.text}")
+                return None
+            
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"HTTP error uploading to Supabase storage: {e.response.status_code} - {e.response.text}")
+            logger.error(f"Failed URL was: {upload_url}")
+            return None
+        except Exception as e:
+            logger.error(f"Error uploading to Supabase storage: {str(e)}")
+            return None
+
+    def test_storage_connection(self) -> bool:
+        """Test Supabase storage by uploading and deleting a small test file"""
+        if not self.enabled:
+            logger.info("Storage uploads disabled; skipping test.")
+            return True
+        if not self.anon_key:
+            logger.warning("SUPABASE_ANON_KEY not set; skipping test.")
+            return True
+        if not self.rest_url:
+            logger.error("No Supabase URL; cannot test storage.")
+            return False
+
+        test_content = "test,data\n1,hello\n2,world"
+        filename = f"test_upload_{int(time.time())}.csv"
+        
+        logger.info(f"Testing upload to bucket: {self.bucket_name}")
+        upload_url = self.upload_file_content(test_content, filename)
+        
+        if not upload_url:
+            logger.error("Test upload failed")
+            return False
+
+        logger.info(f"Successfully uploaded test file: {filename}")
+        logger.info(f"Public URL: {upload_url}")
+        
+        # Cleanup - try to delete test file
+        try:
+            delete_url = f"{self.rest_url}/storage/v1/object/{self.bucket_name}/{filename}"
+            headers = {
+                "apikey": self.anon_key,
+                "Authorization": f"Bearer {self.anon_key}"
+            }
+            del_resp = requests.delete(delete_url, headers=headers, timeout=10)
+            if del_resp.status_code not in (200, 204):
+                logger.warning(f"Could not delete test file: {del_resp.status_code}")
+            else:
+                logger.info(f"Successfully cleaned up test file: {filename}")
+        except Exception as e:
+            logger.warning(f"Could not delete test file: {str(e)}")
+        
+        return True
 
     @retry(
         stop=stop_after_attempt(3),
@@ -453,6 +559,7 @@ async def debug_storage():
             "environment_variables": {
                 "SUPABASE_URL": supabase_url,
                 "SUPABASE_ANON_KEY": "SET" if supabase_key else "MISSING",
+                "SUPABASE_ANON_KEY_LENGTH": len(supabase_key) if supabase_key else 0,
                 "SUPABASE_STORAGE_BUCKET": bucket_name,
                 "ENABLE_STORAGE_UPLOADS": os.getenv('ENABLE_STORAGE_UPLOADS', 'true')
             },
@@ -467,35 +574,54 @@ async def debug_storage():
             debug_info["error"] = "SUPABASE_ANON_KEY environment variable is missing"
             return debug_info
         
-        # Test bucket access
+        # Test bucket access with correct API format
         headers = {
             "apikey": supabase_key,
-            "Authorization": f"Bearer {supabase_key}"
+            "Authorization": f"Bearer {supabase_key}",
+            "Content-Type": "application/json"
         }
         
-        # Try to list bucket contents
-        list_url = f"{supabase_url}/storage/v1/object/list/{bucket_name}?limit=1"
-        list_response = requests.post(list_url, headers=headers, json={}, timeout=10)
+        # Try to list bucket contents with correct body format
+        list_url = f"{supabase_url}/storage/v1/object/list/{bucket_name}"
+        list_body = {
+            "limit": 1,
+            "prefix": ""  # Required property
+        }
+        
+        list_response = requests.post(list_url, headers=headers, json=list_body, timeout=10)
         
         debug_info["bucket_test"] = {
             "list_url": list_url,
+            "request_body": list_body,
             "status_code": list_response.status_code,
-            "response": list_response.text[:200] if list_response.text else "Empty response"
+            "response": list_response.text[:500] if list_response.text else "Empty response",
+            "headers_sent": {k: v for k, v in headers.items() if k != "Authorization"}
         }
         
         if list_response.status_code == 404:
-            debug_info["bucket_test"]["error"] = f"Bucket '{bucket_name}' does not exist. Please create it in Supabase dashboard."
-            debug_info["bucket_test"]["create_bucket_url"] = f"https://app.supabase.com/project/fbiqlsoheofdmgqmjxfc/storage/buckets"
+            debug_info["bucket_test"]["error"] = f"Bucket '{bucket_name}' does not exist or is not accessible"
+        elif list_response.status_code == 403:
+            debug_info["bucket_test"]["error"] = "Access denied. Check your SUPABASE_ANON_KEY permissions"
+        elif list_response.status_code == 401:
+            debug_info["bucket_test"]["error"] = "Unauthorized. Check your SUPABASE_ANON_KEY"
+        elif list_response.status_code == 400:
+            debug_info["bucket_test"]["error"] = "Bad request. API format issue."
         
-        # Try a test upload if bucket exists
+        # Try a test upload if bucket is accessible
         if list_response.status_code == 200:
             test_content = "Product ID,Product Name,Price\nTEST001,Test Product,10.99"
             test_filename = f"test_upload_{int(time.time())}.csv"
             
             upload_url = f"{supabase_url}/storage/v1/object/{bucket_name}/{test_filename}"
+            upload_headers = {
+                "apikey": supabase_key,
+                "Authorization": f"Bearer {supabase_key}",
+                "Content-Type": "text/csv"
+            }
+            
             upload_response = requests.post(
                 upload_url, 
-                headers={**headers, "Content-Type": "text/csv"}, 
+                headers=upload_headers, 
                 data=test_content.encode('utf-8'), 
                 timeout=30
             )
@@ -503,22 +629,39 @@ async def debug_storage():
             debug_info["upload_test"] = {
                 "upload_url": upload_url,
                 "status_code": upload_response.status_code,
-                "response": upload_response.text[:200] if upload_response.text else "Empty response"
+                "response": upload_response.text[:500] if upload_response.text else "Empty response",
+                "success": upload_response.status_code in [200, 201]
             }
             
             if upload_response.status_code in [200, 201]:
                 public_url = f"{supabase_url}/storage/v1/object/public/{bucket_name}/{test_filename}"
-                debug_info["upload_test"]["success"] = True
                 debug_info["upload_test"]["public_url"] = public_url
                 
+                # Test if the public URL is accessible
+                try:
+                    public_response = requests.head(public_url, timeout=10)
+                    debug_info["public_url_test"] = {
+                        "public_url": public_url,
+                        "status_code": public_response.status_code,
+                        "accessible": public_response.status_code == 200
+                    }
+                except Exception as e:
+                    debug_info["public_url_test"] = {
+                        "public_url": public_url,
+                        "error": str(e)
+                    }
+                
                 # Clean up test file
-                delete_response = requests.delete(upload_url, headers=headers, timeout=10)
-                debug_info["cleanup"] = {
-                    "delete_status": delete_response.status_code,
-                    "deleted": delete_response.status_code in [200, 204]
-                }
-            else:
-                debug_info["upload_test"]["success"] = False
+                try:
+                    delete_response = requests.delete(upload_url, headers=upload_headers, timeout=10)
+                    debug_info["cleanup"] = {
+                        "delete_status": delete_response.status_code,
+                        "deleted": delete_response.status_code in [200, 204]
+                    }
+                except Exception as e:
+                    debug_info["cleanup"] = {
+                        "error": str(e)
+                    }
         
         return debug_info
         
@@ -526,6 +669,7 @@ async def debug_storage():
         logger.error(f"Storage debug failed: {str(e)}")
         return {
             "error": str(e),
+            "error_type": type(e).__name__,
             "environment_variables": {
                 "SUPABASE_URL": os.getenv('SUPABASE_URL', 'NOT SET'),
                 "SUPABASE_ANON_KEY": "SET" if os.getenv('SUPABASE_ANON_KEY') else "NOT SET",
