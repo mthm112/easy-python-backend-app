@@ -192,7 +192,7 @@ class SupabaseStorage:
         
         return True
 
-# Pre-defined report configurations
+
 REPORT_CONFIGS = {
     "overpriced": {
         "name": "Overpriced Products Report",
@@ -439,6 +439,99 @@ async def test_storage():
     except Exception as e:
         logger.error(f"Storage test failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Storage test failed: {str(e)}")
+
+@app.get("/debug/storage")
+async def debug_storage():
+    """Debug storage configuration and test upload"""
+    try:
+        # Check environment variables
+        supabase_url = os.getenv('SUPABASE_URL', 'https://fbiqlsoheofdmgqmjxfc.supabase.co')
+        supabase_key = os.getenv('SUPABASE_ANON_KEY')
+        bucket_name = os.getenv('SUPABASE_STORAGE_BUCKET', 'reports')
+        
+        debug_info = {
+            "environment_variables": {
+                "SUPABASE_URL": supabase_url,
+                "SUPABASE_ANON_KEY": "SET" if supabase_key else "MISSING",
+                "SUPABASE_STORAGE_BUCKET": bucket_name,
+                "ENABLE_STORAGE_UPLOADS": os.getenv('ENABLE_STORAGE_UPLOADS', 'true')
+            },
+            "storage_config": {
+                "rest_url": supabase_url,
+                "bucket_name": bucket_name,
+                "enabled": bool(supabase_key)
+            }
+        }
+        
+        if not supabase_key:
+            debug_info["error"] = "SUPABASE_ANON_KEY environment variable is missing"
+            return debug_info
+        
+        # Test bucket access
+        headers = {
+            "apikey": supabase_key,
+            "Authorization": f"Bearer {supabase_key}"
+        }
+        
+        # Try to list bucket contents
+        list_url = f"{supabase_url}/storage/v1/object/list/{bucket_name}?limit=1"
+        list_response = requests.post(list_url, headers=headers, json={}, timeout=10)
+        
+        debug_info["bucket_test"] = {
+            "list_url": list_url,
+            "status_code": list_response.status_code,
+            "response": list_response.text[:200] if list_response.text else "Empty response"
+        }
+        
+        if list_response.status_code == 404:
+            debug_info["bucket_test"]["error"] = f"Bucket '{bucket_name}' does not exist. Please create it in Supabase dashboard."
+            debug_info["bucket_test"]["create_bucket_url"] = f"https://app.supabase.com/project/fbiqlsoheofdmgqmjxfc/storage/buckets"
+        
+        # Try a test upload if bucket exists
+        if list_response.status_code == 200:
+            test_content = "Product ID,Product Name,Price\nTEST001,Test Product,10.99"
+            test_filename = f"test_upload_{int(time.time())}.csv"
+            
+            upload_url = f"{supabase_url}/storage/v1/object/{bucket_name}/{test_filename}"
+            upload_response = requests.post(
+                upload_url, 
+                headers={**headers, "Content-Type": "text/csv"}, 
+                data=test_content.encode('utf-8'), 
+                timeout=30
+            )
+            
+            debug_info["upload_test"] = {
+                "upload_url": upload_url,
+                "status_code": upload_response.status_code,
+                "response": upload_response.text[:200] if upload_response.text else "Empty response"
+            }
+            
+            if upload_response.status_code in [200, 201]:
+                public_url = f"{supabase_url}/storage/v1/object/public/{bucket_name}/{test_filename}"
+                debug_info["upload_test"]["success"] = True
+                debug_info["upload_test"]["public_url"] = public_url
+                
+                # Clean up test file
+                delete_response = requests.delete(upload_url, headers=headers, timeout=10)
+                debug_info["cleanup"] = {
+                    "delete_status": delete_response.status_code,
+                    "deleted": delete_response.status_code in [200, 204]
+                }
+            else:
+                debug_info["upload_test"]["success"] = False
+        
+        return debug_info
+        
+    except Exception as e:
+        logger.error(f"Storage debug failed: {str(e)}")
+        return {
+            "error": str(e),
+            "environment_variables": {
+                "SUPABASE_URL": os.getenv('SUPABASE_URL', 'NOT SET'),
+                "SUPABASE_ANON_KEY": "SET" if os.getenv('SUPABASE_ANON_KEY') else "NOT SET",
+                "SUPABASE_STORAGE_BUCKET": os.getenv('SUPABASE_STORAGE_BUCKET', 'NOT SET')
+            }
+        }
 
 @app.get("/reports/list")
 async def list_reports():
