@@ -600,7 +600,40 @@ def validate_sql_query(sql_query: str) -> tuple[bool, str]:
     
     return True, "Query validated successfully"
 
-def generate_filename(report_name: str, custom_filename: Optional[str] = None) -> str:
+def convert_numpy_types(obj):
+    """Convert numpy types to Python native types for JSON serialization"""
+    import numpy as np
+    
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif pd.isna(obj):
+        return None
+    else:
+        return obj
+
+def clean_dataframe_for_json(df: pd.DataFrame) -> pd.DataFrame:
+    """Clean DataFrame to ensure JSON serialization compatibility"""
+    df_clean = df.copy()
+    
+    for col in df_clean.columns:
+        # Handle different data types
+        if df_clean[col].dtype == 'int64':
+            df_clean[col] = df_clean[col].astype('Int64')  # Nullable integer
+        elif df_clean[col].dtype == 'float64':
+            df_clean[col] = df_clean[col].astype(float)
+        elif df_clean[col].dtype == 'object':
+            df_clean[col] = df_clean[col].fillna('').astype(str)
+        
+        # Apply numpy conversion to each value
+        df_clean[col] = df_clean[col].apply(convert_numpy_types)
+    
+    return df_clean
     """Generate a safe filename for the report"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
@@ -721,9 +754,12 @@ async def generate_dynamic_report(request: DynamicReportRequest):
             }
         }
         
-        # Add sample data (first 3 rows)
-        if len(df) > 0:
-            response_data["sample_data"] = df.head(3).to_dict('records')
+        # Clean DataFrame for JSON serialization
+        df_clean = clean_dataframe_for_json(df)
+        
+        # Add sample data (first 3 rows) with proper type conversion
+        if len(df_clean) > 0:
+            response_data["sample_data"] = df_clean.head(3).to_dict('records')
         
         return response_data
         
