@@ -827,7 +827,7 @@ async def generate_dynamic_report(request: DynamicReportRequest):
         
         # Ensure all data is JSON serializable
         def make_json_safe(obj):
-            """Recursively make object JSON safe"""
+            """Recursively make object JSON safe - NumPy 2.0 compatible"""
             import numpy as np
             
             if isinstance(obj, dict):
@@ -842,7 +842,7 @@ async def generate_dynamic_report(request: DynamicReportRequest):
                 return bool(obj)
             elif isinstance(obj, np.ndarray):
                 return obj.tolist()
-            elif isinstance(obj, (np.string_, np.unicode_)):
+            elif isinstance(obj, (np.bytes_, str)):  # Updated for NumPy 2.0
                 return str(obj)
             elif hasattr(obj, 'item'):  # numpy scalars
                 return obj.item()
