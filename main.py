@@ -667,6 +667,97 @@ def generate_filename(report_name: str, custom_filename: Optional[str] = None) -
         safe_name = re.sub(r'[^\w\-_]', '_', report_name.lower().replace(' ', '_'))
         return f"dynamic_report_{safe_name}_{timestamp}.csv"
 
+def generate_filename(report_name: str, custom_filename: Optional[str] = None) -> str:
+    """Generate a safe filename for the report"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    if custom_filename:
+        # Clean custom filename
+        safe_filename = re.sub(r'[^\w\-_.]', '_', custom_filename)
+        if not safe_filename.endswith('.csv'):
+            safe_filename += '.csv'
+        # Add timestamp to ensure uniqueness
+        name_part = safe_filename.replace('.csv', '')
+        return f"{name_part}_{timestamp}.csv"
+    else:
+        # Generate from report name
+        safe_name = re.sub(r'[^\w\-_]', '_', report_name.lower().replace(' ', '_'))
+        return f"dynamic_report_{safe_name}_{timestamp}.csv"
+
+def safe_to_dict(df: pd.DataFrame, orient: str = 'records') -> list:
+    """Safely convert DataFrame to dict with proper type conversion"""
+    try:
+        # Clean the dataframe first
+        df_clean = clean_dataframe_for_json(df)
+        
+        # Convert to dict
+        result = df_clean.to_dict(orient=orient)
+        
+        # Apply additional cleaning to the result
+        if orient == 'records':
+            cleaned_result = []
+            for record in result:
+                cleaned_record = {}
+                for key, value in record.items():
+                    cleaned_record[str(key)] = convert_numpy_types(value)
+                cleaned_result.append(cleaned_record)
+            return cleaned_result
+        else:
+            # For other orientations, recursively clean
+            return convert_numpy_types(result)
+            
+    except Exception as e:
+        logger.warning(f"DataFrame to dict conversion failed: {str(e)}")
+        # Fallback: return empty list or basic structure
+        return []
+
+def convert_numpy_types(obj):
+    """Convert numpy types to Python native types for JSON serialization"""
+    import numpy as np
+    
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (np.string_, np.unicode_)):
+        return str(obj)
+    elif pd.isna(obj):
+        return None
+    elif hasattr(obj, 'item'):  # Handle numpy scalars
+        return obj.item()
+    else:
+        return obj
+
+def clean_dataframe_for_json(df: pd.DataFrame) -> pd.DataFrame:
+    """Clean DataFrame to ensure JSON serialization compatibility"""
+    df_clean = df.copy()
+    
+    # Convert all columns to ensure JSON compatibility
+    for col in df_clean.columns:
+        # Handle different data types
+        if df_clean[col].dtype.name.startswith('int'):
+            # Convert to nullable integer, then to Python int
+            df_clean[col] = df_clean[col].astype('Int64')
+            df_clean[col] = df_clean[col].apply(lambda x: int(x) if pd.notna(x) else None)
+        elif df_clean[col].dtype.name.startswith('float'):
+            # Convert to Python float
+            df_clean[col] = df_clean[col].apply(lambda x: float(x) if pd.notna(x) else None)
+        elif df_clean[col].dtype.name.startswith('bool'):
+            # Convert to Python bool
+            df_clean[col] = df_clean[col].apply(lambda x: bool(x) if pd.notna(x) else None)
+        elif df_clean[col].dtype == 'object':
+            # Convert to string and handle nulls
+            df_clean[col] = df_clean[col].apply(lambda x: str(x) if pd.notna(x) else None)
+        
+        # Apply numpy conversion as final step
+        df_clean[col] = df_clean[col].apply(convert_numpy_types)
+    
+    return df_clean
+
 # API Endpoints
 
 @app.get("/")
@@ -771,20 +862,58 @@ async def generate_dynamic_report(request: DynamicReportRequest):
             }
         }
         
-        # Clean DataFrame for JSON serialization
-        df_clean = clean_dataframe_for_json(df)
-        
         # Add sample data (first 3 rows) with proper type conversion
-        if len(df_clean) > 0:
-            response_data["sample_data"] = df_clean.head(3).to_dict('records')
+        if len(df) > 0:
+            response_data["sample_data"] = safe_to_dict(df.head(3), 'records')
         
-        return response_data
+        # Ensure all data is JSON serializable
+        def make_json_safe(obj):
+            """Recursively make object JSON safe"""
+            import numpy as np
+            
+            if isinstance(obj, dict):
+                return {k: make_json_safe(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [make_json_safe(item) for item in obj]
+            elif isinstance(obj, np.integer):
+                return int(obj)
+            elif isinstance(obj, np.floating):
+                return float(obj)
+            elif isinstance(obj, np.bool_):
+                return bool(obj)
+            elif isinstance(obj, np.ndarray):
+                return obj.tolist()
+            elif isinstance(obj, (np.string_, np.unicode_)):
+                return str(obj)
+            elif hasattr(obj, 'item'):  # numpy scalars
+                return obj.item()
+            elif pd.isna(obj):
+                return None
+            else:
+                return obj
+        
+        # Clean the response data
+        safe_response_data = make_json_safe(response_data)
+        
+        # Return as JSONResponse with explicit JSON conversion
+        return JSONResponse(
+            content=safe_response_data,
+            status_code=200,
+            headers={"Content-Type": "application/json"}
+        )
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Dynamic report generation failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Dynamic report generation failed: {str(e)}")
+        return JSONResponse(
+            content={
+                "success": False,
+                "error": f"Dynamic report generation failed: {str(e)}",
+                "timestamp": datetime.now().isoformat()
+            },
+            status_code=500
+        )
 
 @app.post("/generate-csv-from-query")
 async def generate_csv_from_query(request: SQLRequest):
