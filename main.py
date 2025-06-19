@@ -650,6 +650,23 @@ def clean_dataframe_for_json(df: pd.DataFrame) -> pd.DataFrame:
         safe_name = re.sub(r'[^\w\-_]', '_', report_name.lower().replace(' ', '_'))
         return f"dynamic_report_{safe_name}_{timestamp}.csv"
 
+def generate_filename(report_name: str, custom_filename: Optional[str] = None) -> str:
+    """Generate a safe filename for the report"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    if custom_filename:
+        # Clean custom filename
+        safe_filename = re.sub(r'[^\w\-_.]', '_', custom_filename)
+        if not safe_filename.endswith('.csv'):
+            safe_filename += '.csv'
+        # Add timestamp to ensure uniqueness
+        name_part = safe_filename.replace('.csv', '')
+        return f"{name_part}_{timestamp}.csv"
+    else:
+        # Generate from report name
+        safe_name = re.sub(r'[^\w\-_]', '_', report_name.lower().replace(' ', '_'))
+        return f"dynamic_report_{safe_name}_{timestamp}.csv"
+
 # API Endpoints
 
 @app.get("/")
