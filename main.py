@@ -601,7 +601,7 @@ def validate_sql_query(sql_query: str) -> tuple[bool, str]:
     return True, "Query validated successfully"
 
 def convert_numpy_types(obj):
-    """Convert numpy types to Python native types for JSON serialization"""
+    """Convert numpy types to Python native types for JSON serialization - NumPy 2.0 compatible"""
     import numpy as np
     
     if isinstance(obj, np.integer):
@@ -612,80 +612,43 @@ def convert_numpy_types(obj):
         return bool(obj)
     elif isinstance(obj, np.ndarray):
         return obj.tolist()
+    elif isinstance(obj, (np.bytes_, str)):  # Updated for NumPy 2.0
+        return str(obj)
     elif pd.isna(obj):
         return None
+    elif hasattr(obj, 'item'):  # Handle numpy scalars
+        return obj.item()
     else:
         return obj
 
 def clean_dataframe_for_json(df: pd.DataFrame) -> pd.DataFrame:
-    """Clean DataFrame to ensure JSON serialization compatibility"""
+    """Clean DataFrame to ensure JSON serialization compatibility - NumPy 2.0 compatible"""
     df_clean = df.copy()
     
+    # Convert all columns to ensure JSON compatibility
     for col in df_clean.columns:
         # Handle different data types
-        if df_clean[col].dtype == 'int64':
-            df_clean[col] = df_clean[col].astype('Int64')  # Nullable integer
-        elif df_clean[col].dtype == 'float64':
-            df_clean[col] = df_clean[col].astype(float)
+        if df_clean[col].dtype.name.startswith('int'):
+            # Convert to nullable integer, then to Python int
+            df_clean[col] = df_clean[col].astype('Int64')
+            df_clean[col] = df_clean[col].apply(lambda x: int(x) if pd.notna(x) else None)
+        elif df_clean[col].dtype.name.startswith('float'):
+            # Convert to Python float
+            df_clean[col] = df_clean[col].apply(lambda x: float(x) if pd.notna(x) else None)
+        elif df_clean[col].dtype.name.startswith('bool'):
+            # Convert to Python bool
+            df_clean[col] = df_clean[col].apply(lambda x: bool(x) if pd.notna(x) else None)
         elif df_clean[col].dtype == 'object':
-            df_clean[col] = df_clean[col].fillna('').astype(str)
+            # Convert to string and handle nulls
+            df_clean[col] = df_clean[col].apply(lambda x: str(x) if pd.notna(x) else None)
         
-        # Apply numpy conversion to each value
+        # Apply numpy conversion as final step
         df_clean[col] = df_clean[col].apply(convert_numpy_types)
     
     return df_clean
-    """Generate a safe filename for the report"""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    if custom_filename:
-        # Clean custom filename
-        safe_filename = re.sub(r'[^\w\-_.]', '_', custom_filename)
-        if not safe_filename.endswith('.csv'):
-            safe_filename += '.csv'
-        # Add timestamp to ensure uniqueness
-        name_part = safe_filename.replace('.csv', '')
-        return f"{name_part}_{timestamp}.csv"
-    else:
-        # Generate from report name
-        safe_name = re.sub(r'[^\w\-_]', '_', report_name.lower().replace(' ', '_'))
-        return f"dynamic_report_{safe_name}_{timestamp}.csv"
-
-def generate_filename(report_name: str, custom_filename: Optional[str] = None) -> str:
-    """Generate a safe filename for the report"""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    if custom_filename:
-        # Clean custom filename
-        safe_filename = re.sub(r'[^\w\-_.]', '_', custom_filename)
-        if not safe_filename.endswith('.csv'):
-            safe_filename += '.csv'
-        # Add timestamp to ensure uniqueness
-        name_part = safe_filename.replace('.csv', '')
-        return f"{name_part}_{timestamp}.csv"
-    else:
-        # Generate from report name
-        safe_name = re.sub(r'[^\w\-_]', '_', report_name.lower().replace(' ', '_'))
-        return f"dynamic_report_{safe_name}_{timestamp}.csv"
-
-def generate_filename(report_name: str, custom_filename: Optional[str] = None) -> str:
-    """Generate a safe filename for the report"""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    if custom_filename:
-        # Clean custom filename
-        safe_filename = re.sub(r'[^\w\-_.]', '_', custom_filename)
-        if not safe_filename.endswith('.csv'):
-            safe_filename += '.csv'
-        # Add timestamp to ensure uniqueness
-        name_part = safe_filename.replace('.csv', '')
-        return f"{name_part}_{timestamp}.csv"
-    else:
-        # Generate from report name
-        safe_name = re.sub(r'[^\w\-_]', '_', report_name.lower().replace(' ', '_'))
-        return f"dynamic_report_{safe_name}_{timestamp}.csv"
 
 def safe_to_dict(df: pd.DataFrame, orient: str = 'records') -> list:
-    """Safely convert DataFrame to dict with proper type conversion"""
+    """Safely convert DataFrame to dict with proper type conversion - NumPy 2.0 compatible"""
     try:
         # Clean the dataframe first
         df_clean = clean_dataframe_for_json(df)
@@ -711,26 +674,22 @@ def safe_to_dict(df: pd.DataFrame, orient: str = 'records') -> list:
         # Fallback: return empty list or basic structure
         return []
 
-def convert_numpy_types(obj):
-    """Convert numpy types to Python native types for JSON serialization"""
-    import numpy as np
+def generate_filename(report_name: str, custom_filename: Optional[str] = None) -> str:
+    """Generate a safe filename for the report"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
-    if isinstance(obj, np.integer):
-        return int(obj)
-    elif isinstance(obj, np.floating):
-        return float(obj)
-    elif isinstance(obj, np.bool_):
-        return bool(obj)
-    elif isinstance(obj, np.ndarray):
-        return obj.tolist()
-    elif isinstance(obj, (np.string_, np.unicode_)):
-        return str(obj)
-    elif pd.isna(obj):
-        return None
-    elif hasattr(obj, 'item'):  # Handle numpy scalars
-        return obj.item()
+    if custom_filename:
+        # Clean custom filename
+        safe_filename = re.sub(r'[^\w\-_.]', '_', custom_filename)
+        if not safe_filename.endswith('.csv'):
+            safe_filename += '.csv'
+        # Add timestamp to ensure uniqueness
+        name_part = safe_filename.replace('.csv', '')
+        return f"{name_part}_{timestamp}.csv"
     else:
-        return obj
+        # Generate from report name
+        safe_name = re.sub(r'[^\w\-_]', '_', report_name.lower().replace(' ', '_'))
+        return f"dynamic_report_{safe_name}_{timestamp}.csv"
 
 def clean_dataframe_for_json(df: pd.DataFrame) -> pd.DataFrame:
     """Clean DataFrame to ensure JSON serialization compatibility"""
