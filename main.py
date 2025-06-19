@@ -230,58 +230,104 @@ def get_supabase_data_dynamic(sql_query: str) -> pd.DataFrame:
         # Extract table name from SQL query
         table_name = extract_table_from_sql(sql_query)
         if not table_name:
-            # Default fallback table
             table_name = "mbm_price_comparison"
         
         logger.info(f"Executing dynamic query on table: {table_name}")
         logger.info(f"SQL Query: {sql_query[:200]}...")
         
-        # Convert SQL to REST API parameters
-        rest_params = convert_sql_to_rest_params(sql_query)
+        # Check if this is a simple SELECT * query
+        sql_lower = sql_query.lower().strip()
+        is_simple_query = (
+            sql_lower.startswith('select *') and 
+            'where' not in sql_lower and 
+            'group by' not in sql_lower and
+            'having' not in sql_lower and
+            '(' not in sql_lower
+        )
         
-        base_url = f"{supabase_url}/rest/v1/{table_name}"
-        
-        all_data = []
-        page_size = 1000
-        offset = 0
-        
-        while True:
-            # Build URL with pagination and filters
-            params = {
-                'limit': page_size,
-                'offset': offset,
-                **rest_params
-            }
+        if is_simple_query:
+            # Use REST API parameters for simple queries
+            rest_params = convert_sql_to_rest_params(sql_query)
+            base_url = f"{supabase_url}/rest/v1/{table_name}"
             
-            logger.info(f"Fetching rows {offset} to {offset + page_size}")
+            all_data = []
+            page_size = 1000
+            offset = 0
             
-            response = requests.get(base_url, headers=headers, params=params)
-            
-            if response.status_code == 200:
-                page_data = response.json()
+            while True:
+                params = {
+                    'limit': page_size,
+                    'offset': offset,
+                    **rest_params
+                }
                 
-                if not page_data:  # No more data
-                    break
+                logger.info(f"Fetching rows {offset} to {offset + page_size}")
+                
+                response = requests.get(base_url, headers=headers, params=params)
+                
+                if response.status_code == 200:
+                    page_data = response.json()
                     
-                all_data.extend(page_data)
-                logger.info(f"Retrieved {len(page_data)} rows (total so far: {len(all_data)})")
-                
-                # If we got less than page_size, we're done
-                if len(page_data) < page_size:
-                    break
+                    if not page_data:
+                        break
+                        
+                    all_data.extend(page_data)
+                    logger.info(f"Retrieved {len(page_data)} rows (total so far: {len(all_data)})")
                     
-                offset += page_size
+                    if len(page_data) < page_size:
+                        break
+                        
+                    offset += page_size
+                    
+                else:
+                    error_msg = f"Supabase API error: {response.status_code} - {response.text}"
+                    logger.error(error_msg)
+                    raise Exception(error_msg)
+        
+        else:
+            # For complex queries, get all data first then filter in Python
+            logger.info("Complex query detected - fetching all data for Python filtering")
+            base_url = f"{supabase_url}/rest/v1/{table_name}"
+            
+            all_data = []
+            page_size = 1000
+            offset = 0
+            
+            while True:
+                params = {
+                    'limit': page_size,
+                    'offset': offset
+                }
                 
-            else:
-                error_msg = f"Supabase API error: {response.status_code} - {response.text}"
-                logger.error(error_msg)
-                raise Exception(error_msg)
+                logger.info(f"Fetching rows {offset} to {offset + page_size}")
+                
+                response = requests.get(base_url, headers=headers, params=params)
+                
+                if response.status_code == 200:
+                    page_data = response.json()
+                    
+                    if not page_data:
+                        break
+                        
+                    all_data.extend(page_data)
+                    logger.info(f"Retrieved {len(page_data)} rows (total so far: {len(all_data)})")
+                    
+                    if len(page_data) < page_size:
+                        break
+                        
+                    offset += page_size
+                    
+                else:
+                    error_msg = f"Supabase API error: {response.status_code} - {response.text}"
+                    logger.error(error_msg)
+                    raise Exception(error_msg)
         
         logger.info(f"Completed data fetch: {len(all_data)} total records")
         df = pd.DataFrame(all_data)
         
-        # Apply additional SQL processing if needed
-        df = apply_sql_transformations(df, sql_query)
+        # Apply SQL transformations if this was a complex query
+        if not is_simple_query:
+            df = apply_sql_transformations(df, sql_query)
         
         return df
             
@@ -310,30 +356,42 @@ def extract_table_from_sql(sql_query: str) -> str:
         return "mbm_price_comparison"
 
 def convert_sql_to_rest_params(sql_query: str) -> Dict[str, Any]:
-    """Convert basic SQL operations to Supabase REST API parameters"""
+    """Convert basic SQL operations to Supabase REST API parameters - CASE SENSITIVE"""
     params = {}
-    sql_lower = sql_query.lower().strip()
+    sql_original = sql_query.strip()  # Keep original case
+    sql_lower = sql_query.lower().strip()  # Only use lowercase for pattern matching
     
     try:
-        # Handle SELECT columns
+        # Handle SELECT columns - preserve original case
         select_match = re.search(r'select\s+(.*?)\s+from', sql_lower, re.DOTALL)
         if select_match:
-            select_clause = select_match.group(1).strip()
-            if select_clause != '*' and 'distinct' not in select_clause:
-                # Extract column names (basic implementation)
-                columns = [col.strip().replace('"', '') for col in select_clause.split(',') if '(' not in col]
-                if columns:
-                    params['select'] = ','.join(columns[:20])  # Limit to first 20 columns
+            # Get the original case version of the select clause
+            select_start = select_match.start(1)
+            select_end = select_match.end(1)
+            # Find the corresponding position in the original query
+            from_pos = sql_original.lower().find(' from ')
+            if from_pos > 0:
+                select_original = sql_original[select_original.lower().find('select') + 6:from_pos].strip()
+                
+                if select_original != '*' and 'distinct' not in select_original.lower():
+                    # Extract column names preserving case - only if no functions
+                    if '(' not in select_original and 'round' not in select_original.lower():
+                        columns = [col.strip().replace('"', '') for col in select_original.split(',')]
+                        if columns and len(columns) <= 20:  # Limit to first 20 columns
+                            params['select'] = ','.join(columns[:20])
         
-        # Handle ORDER BY
+        # Handle ORDER BY - preserve case
         order_match = re.search(r'order\s+by\s+([^;]+)', sql_lower)
         if order_match:
-            order_clause = order_match.group(1).strip()
+            # Find original case version
+            order_start = sql_original.lower().find('order by') + 8
+            order_clause = sql_original[order_start:].split(';')[0].strip()
+            
             # Basic order conversion (first column only)
             order_parts = order_clause.split(',')[0].strip().split()
             if len(order_parts) >= 1:
                 column = order_parts[0].replace('"', '').replace('`', '')
-                direction = 'desc' if len(order_parts) > 1 and 'desc' in order_parts[1] else 'asc'
+                direction = 'desc' if len(order_parts) > 1 and 'desc' in order_parts[1].lower() else 'asc'
                 params['order'] = f"{column}.{direction}"
         
         # Handle LIMIT
