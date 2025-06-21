@@ -261,7 +261,7 @@ def execute_sql_with_sqlalchemy(sql_query: str) -> pd.DataFrame:
         # Build connection parameters
         host = os.getenv('SUPABASE_HOST', 'aws-0-eu-west-2.pooler.supabase.com')
         database = os.getenv('SUPABASE_DB', 'postgres')
-        user = os.getenv('SUPABASE_USER', 'postgres.fbiqlsoheofdmgqmjxfc')
+        user = 'postgres.fbiqlsoheofdmgqmjxfc'
         password = os.getenv('SUPABASE_PASSWORD')
         port = os.getenv('SUPABASE_PORT', '6543')  # CHANGED: Use pooler port
         
@@ -306,7 +306,7 @@ def execute_sql_with_psycopg2(sql_query: str) -> pd.DataFrame:
         # Connection parameters
         host = os.getenv('SUPABASE_HOST', 'aws-0-eu-west-2.pooler.supabase.com')
         database = os.getenv('SUPABASE_DB', 'postgres')
-        user = os.getenv('SUPABASE_USER', 'postgres.fbiqlsoheofdmgqmjxfc')
+        user = 'postgres.fbiqlsoheofdmgqmjxfc'
         password = os.getenv('SUPABASE_PASSWORD')
         port = os.getenv('SUPABASE_PORT', '6543')  # Use pooler port
         
