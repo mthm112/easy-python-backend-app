@@ -214,68 +214,89 @@ class SupabaseStorage:
         return True
 
 def execute_sql_directly_supabase(sql_query: str) -> pd.DataFrame:
-    """Execute SQL directly against Supabase PostgreSQL"""
+    """Execute SQL directly against Supabase PostgreSQL with proper SSL and connection handling"""
     try:
-        # Build connection string using your exact environment variables
+        # Build connection parameters
         host = os.getenv('SUPABASE_HOST', 'aws-0-eu-west-2.pooler.supabase.com')
         database = os.getenv('SUPABASE_DB', 'postgres') 
         user = os.getenv('SUPABASE_USER', 'postgres.fbiqlsoheofdmgqmjxfc')
         password = os.getenv('SUPABASE_PASSWORD')
-        port = os.getenv('SUPABASE_PORT', '5432')
+        port = os.getenv('SUPABASE_PORT', '6543')  # Changed from 5432 to 6543 for pooler
         
         if not password:
             raise Exception("SUPABASE_PASSWORD environment variable is required")
         
-        # Create connection string
-        conn_string = f"postgresql://{user}:{password}@{host}:{port}/{database}"
+        # URL encode the password to handle special characters
+        from urllib.parse import quote_plus
+        encoded_password = quote_plus(password)
+        
+        # Create connection string with SSL and proper pooler configuration
+        conn_string = f"postgresql://{user}:{encoded_password}@{host}:{port}/{database}?sslmode=require&connect_timeout=60&application_name=pricing_api"
         
         logger.info("🚀 Attempting direct PostgreSQL execution...")
-        logger.info(f"Host: {host}")
+        logger.info(f"Host: {host}:{port}")
         logger.info(f"Database: {database}")
         logger.info(f"User: {user}")
         logger.info(f"SQL Query: {sql_query[:150]}...")
         
-        # Execute query using pandas (handles connection automatically)
-        df = pd.read_sql_query(sql_query, conn_string)
+        # Execute query using pandas with connection timeout
+        df = pd.read_sql_query(
+            sql_query, 
+            conn_string,
+            params=None
+        )
         
         logger.info(f"✅ Direct SQL execution successful: {len(df)} rows returned")
         return df
         
     except Exception as e:
         logger.error(f"❌ Direct SQL execution failed: {str(e)}")
+        logger.error(f"Connection details - Host: {host}:{port}, User: {user}, DB: {database}")
         raise
 
 def execute_sql_with_sqlalchemy(sql_query: str) -> pd.DataFrame:
-    """Alternative method using SQLAlchemy engine"""
+    """Alternative method using SQLAlchemy engine with proper Supabase configuration"""
     try:
-        # Build connection string
+        # Build connection parameters
         host = os.getenv('SUPABASE_HOST', 'aws-0-eu-west-2.pooler.supabase.com')
         database = os.getenv('SUPABASE_DB', 'postgres')
         user = os.getenv('SUPABASE_USER', 'postgres.fbiqlsoheofdmgqmjxfc')
         password = os.getenv('SUPABASE_PASSWORD')
-        port = os.getenv('SUPABASE_PORT', '5432')
+        port = os.getenv('SUPABASE_PORT', '6543')  # Use pooler port
         
         if not password:
             raise Exception("SUPABASE_PASSWORD environment variable is required")
         
-        # Create SQLAlchemy engine
+        # URL encode the password
+        from urllib.parse import quote_plus
+        encoded_password = quote_plus(password)
+        
+        # Create SQLAlchemy engine with Supabase-specific settings
         engine = create_engine(
-            f"postgresql://{user}:{password}@{host}:{port}/{database}",
+            f"postgresql://{user}:{encoded_password}@{host}:{port}/{database}",
             pool_pre_ping=True,
-            pool_recycle=300
+            pool_recycle=300,
+            pool_timeout=60,
+            connect_args={
+                "sslmode": "require",
+                "connect_timeout": 60,
+                "application_name": "pricing_api_sqlalchemy"
+            }
         )
         
         logger.info("🔧 Attempting SQLAlchemy execution...")
         logger.info(f"SQL Query: {sql_query[:150]}...")
         
-        # Execute query
-        df = pd.read_sql_query(sql_query, engine)
+        # Execute query with timeout
+        with engine.connect() as connection:
+            df = pd.read_sql_query(sql_query, connection)
         
         logger.info(f"✅ SQLAlchemy execution successful: {len(df)} rows returned")
         return df
         
     except Exception as e:
         logger.error(f"❌ SQLAlchemy execution failed: {str(e)}")
+        logger.error(f"Connection details - Host: {host}:{port}, User: {user}, DB: {database}")
         raise
 
 def get_supabase_data_enhanced(sql_query: str) -> pd.DataFrame:
@@ -307,7 +328,7 @@ def get_supabase_data_enhanced(sql_query: str) -> pd.DataFrame:
         raise Exception(f"Unable to execute SQL query with any available method: {str(e)}")
 
 def test_direct_connection() -> bool:
-    """Test the direct PostgreSQL connection"""
+    """Test the direct PostgreSQL connection with proper error logging"""
     try:
         test_query = "SELECT COUNT(*) as total_rows FROM public.mbm_price_comparison LIMIT 1"
         df = execute_sql_directly_supabase(test_query)
@@ -321,7 +342,16 @@ def test_direct_connection() -> bool:
             return False
             
     except Exception as e:
-        logger.error(f"❌ Connection test failed: {str(e)}")
+        logger.error(f"❌ Connection test failed with detailed error: {str(e)}")
+        
+        # Additional diagnostic information
+        logger.error("🔍 Environment variables check:")
+        logger.error(f"SUPABASE_HOST: {os.getenv('SUPABASE_HOST', 'NOT SET')}")
+        logger.error(f"SUPABASE_DB: {os.getenv('SUPABASE_DB', 'NOT SET')}")
+        logger.error(f"SUPABASE_USER: {os.getenv('SUPABASE_USER', 'NOT SET')}")
+        logger.error(f"SUPABASE_PASSWORD: {'SET' if os.getenv('SUPABASE_PASSWORD') else 'NOT SET'}")
+        logger.error(f"SUPABASE_PORT: {os.getenv('SUPABASE_PORT', 'NOT SET (defaulting to 5432)')}")
+        
         return False
 
 def get_supabase_data_dynamic(sql_query: str) -> pd.DataFrame:
@@ -1477,16 +1507,27 @@ async def get_query_examples():
         ]
     }
 
-@app.get("/test-direct-connection")
-async def test_direct_db_connection():
-    """Test direct PostgreSQL connection"""
+@app.get("/test-connection-detailed")
+async def test_connection_detailed():
+    """Detailed connection testing with multiple configurations"""
     try:
-        success = test_direct_connection()
+        results = test_direct_connection_detailed()
         return {
-            "success": success,
-            "method": "direct_postgresql", 
-            "message": "Direct connection test completed",
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "results": results,
+            "recommendations": {
+                "environment_variables": {
+                    "SUPABASE_PORT": "6543 (for pooler) or 5432 (direct)",
+                    "SUPABASE_HOST": "aws-0-eu-west-2.pooler.supabase.com",
+                    "required": ["SUPABASE_PASSWORD", "SUPABASE_USER"]
+                },
+                "next_steps": [
+                    "Ensure SUPABASE_PASSWORD is correctly set",
+                    "Try port 6543 for Supabase pooler connection",
+                    "Check if your Supabase project allows direct connections",
+                    "Verify SSL certificates if connection fails"
+                ]
+            }
         }
     except Exception as e:
         return {
