@@ -806,13 +806,18 @@ async def generate_dynamic_report(request: DynamicReportRequest):
         
         # Ensure all data is JSON serializable
         def make_json_safe(obj):
-            """Recursively make object JSON safe - NumPy 2.0 compatible"""
+            """Recursively make object JSON safe - handles timestamps and NumPy 2.0"""
             import numpy as np
+            from datetime import datetime, date
             
             if isinstance(obj, dict):
                 return {k: make_json_safe(v) for k, v in obj.items()}
             elif isinstance(obj, list):
                 return [make_json_safe(item) for item in obj]
+            elif isinstance(obj, (datetime, pd.Timestamp)):
+                return obj.isoformat()
+            elif isinstance(obj, date):
+                return obj.isoformat()
             elif isinstance(obj, np.integer):
                 return int(obj)
             elif isinstance(obj, np.floating):
@@ -821,14 +826,16 @@ async def generate_dynamic_report(request: DynamicReportRequest):
                 return bool(obj)
             elif isinstance(obj, np.ndarray):
                 return obj.tolist()
-            elif isinstance(obj, (np.bytes_, str)):  # Updated for NumPy 2.0
+            elif isinstance(obj, (np.bytes_, str)):
                 return str(obj)
             elif hasattr(obj, 'item'):  # numpy scalars
                 return obj.item()
             elif pd.isna(obj):
                 return None
+            elif hasattr(obj, 'isoformat'):  # Any other datetime-like object
+                return obj.isoformat()
             else:
-                return obj
+                return str(obj)  # Convert unknown types to string as fallback
         
         # Clean the response data
         safe_response_data = make_json_safe(response_data)
