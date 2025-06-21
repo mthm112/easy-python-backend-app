@@ -220,9 +220,9 @@ def execute_sql_directly_supabase(sql_query: str) -> pd.DataFrame:
         # Build connection parameters - FIXED VALUES
         host = os.getenv('SUPABASE_HOST', 'aws-0-eu-west-2.pooler.supabase.com')
         database = os.getenv('SUPABASE_DB', 'postgres') 
-        user = os.getenv('SUPABASE_USER', 'postgres.fbiqlsoheofdmgqmjxfc')  # Use env var, fallback to your user
+        user = 'postgres.fbiqlsoheofdmgqmjxfc'  # Use env var, fallback to your user
         password = os.getenv('SUPABASE_PASSWORD')
-        port = os.getenv('SUPABASE_PORT', '6543')  # CHANGED: Use 6543 for pooler
+        port = '5432'  # CHANGED: Use 6543 for pooler
         
         if not password:
             raise Exception("SUPABASE_PASSWORD environment variable is required")
