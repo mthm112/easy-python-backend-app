@@ -216,12 +216,12 @@ class SupabaseStorage:
 def execute_sql_directly_supabase(sql_query: str) -> pd.DataFrame:
     """Execute SQL directly against Supabase PostgreSQL with proper SSL and connection handling"""
     try:
-        # Build connection parameters
+        # Build connection parameters - FIXED VALUES
         host = os.getenv('SUPABASE_HOST', 'aws-0-eu-west-2.pooler.supabase.com')
         database = os.getenv('SUPABASE_DB', 'postgres') 
-        user = 'postgres.fbiqlsoheofdmgqmjxfc'
+        user = os.getenv('SUPABASE_USER', 'postgres.fbiqlsoheofdmgqmjxfc')  # Use env var, fallback to your user
         password = os.getenv('SUPABASE_PASSWORD')
-        port = os.getenv('SUPABASE_PORT', '6543')  # Changed from 5432 to 6543 for pooler
+        port = os.getenv('SUPABASE_PORT', '6543')  # CHANGED: Use 6543 for pooler
         
         if not password:
             raise Exception("SUPABASE_PASSWORD environment variable is required")
@@ -260,9 +260,9 @@ def execute_sql_with_sqlalchemy(sql_query: str) -> pd.DataFrame:
         # Build connection parameters
         host = os.getenv('SUPABASE_HOST', 'aws-0-eu-west-2.pooler.supabase.com')
         database = os.getenv('SUPABASE_DB', 'postgres')
-        user = 'postgres.fbiqlsoheofdmgqmjxfc'
+        user = os.getenv('SUPABASE_USER', 'postgres.fbiqlsoheofdmgqmjxfc')
         password = os.getenv('SUPABASE_PASSWORD')
-        port = os.getenv('SUPABASE_PORT', '6543')  # Use pooler port
+        port = os.getenv('SUPABASE_PORT', '6543')  # CHANGED: Use pooler port
         
         if not password:
             raise Exception("SUPABASE_PASSWORD environment variable is required")
@@ -299,353 +299,126 @@ def execute_sql_with_sqlalchemy(sql_query: str) -> pd.DataFrame:
         logger.error(f"Connection details - Host: {host}:{port}, User: {user}, DB: {database}")
         raise
 
+def execute_sql_with_psycopg2(sql_query: str) -> pd.DataFrame:
+    """Direct psycopg2 connection method - often fastest"""
+    try:
+        # Connection parameters
+        host = os.getenv('SUPABASE_HOST', 'aws-0-eu-west-2.pooler.supabase.com')
+        database = os.getenv('SUPABASE_DB', 'postgres')
+        user = os.getenv('SUPABASE_USER', 'postgres.fbiqlsoheofdmgqmjxfc')
+        password = os.getenv('SUPABASE_PASSWORD')
+        port = os.getenv('SUPABASE_PORT', '6543')  # Use pooler port
+        
+        if not password:
+            raise Exception("SUPABASE_PASSWORD environment variable is required")
+        
+        logger.info("🔌 Attempting direct psycopg2 connection...")
+        
+        # Create connection
+        conn = psycopg2.connect(
+            host=host,
+            database=database,
+            user=user,
+            password=password,
+            port=port,
+            sslmode='require',
+            connect_timeout=30
+        )
+        
+        # Execute query and get DataFrame
+        df = pd.read_sql_query(sql_query, conn)
+        conn.close()
+        
+        logger.info(f"✅ psycopg2 execution successful: {len(df)} rows returned")
+        return df
+        
+    except Exception as e:
+        logger.error(f"❌ psycopg2 execution failed: {str(e)}")
+        raise
+
 def get_supabase_data_enhanced(sql_query: str) -> pd.DataFrame:
     """
-    Enhanced SQL execution with multiple fallback methods with detailed error logging
+    Enhanced SQL execution with direct connections ONLY - NO REST API fallback
     """
     
-    # Method 1: Direct PostgreSQL with pandas (PREFERRED)
+    # Method 1: Direct psycopg2 (FASTEST)
     try:
-        logger.info("🎯 Method 1: Trying direct PostgreSQL with pandas...")
-        logger.info("📝 Testing direct connection with hard-coded username...")
+        logger.info("🎯 Method 1: Trying direct psycopg2 connection...")
+        return execute_sql_with_psycopg2(sql_query)
+    except Exception as e:
+        logger.warning(f"Method 1 (psycopg2) failed: {str(e)}")
+    
+    # Method 2: Direct PostgreSQL with pandas
+    try:
+        logger.info("🎯 Method 2: Trying direct PostgreSQL with pandas...")
         return execute_sql_directly_supabase(sql_query)
     except Exception as e:
-        logger.error(f"❌ Method 1 FAILED: {str(e)}")
-        logger.error(f"🔍 Direct connection error details: {type(e).__name__}")
+        logger.warning(f"Method 2 (pandas direct) failed: {str(e)}")
     
-    # Method 2: SQLAlchemy engine (BACKUP)
+    # Method 3: SQLAlchemy engine
     try:
-        logger.info("🎯 Method 2: Trying SQLAlchemy engine...")
+        logger.info("🎯 Method 3: Trying SQLAlchemy engine...")
         return execute_sql_with_sqlalchemy(sql_query)
     except Exception as e:
-        logger.error(f"❌ Method 2 FAILED: {str(e)}")
-        logger.error(f"🔍 SQLAlchemy error details: {type(e).__name__}")
+        logger.warning(f"Method 3 (SQLAlchemy) failed: {str(e)}")
     
-    # Method 3: Fallback to REST API (LAST RESORT)
-    try:
-        logger.info("🎯 Method 3: Falling back to REST API...")
-        logger.warning("⚠️  Direct connections failed - using REST API fallback (slower for complex queries)")
-        return get_supabase_data_dynamic(sql_query)  # Your existing function
-    except Exception as e:
-        logger.error(f"❌ All methods failed. Final error: {str(e)}")
-        raise Exception(f"Unable to execute SQL query with any available method: {str(e)}")
+    # If all direct methods fail, raise an error (NO REST API fallback)
+    error_msg = "All direct database connection methods failed. Check your database credentials and network connectivity."
+    logger.error(f"❌ {error_msg}")
+    raise Exception(error_msg)
 
 def test_direct_connection() -> bool:
-    """Test the direct PostgreSQL connection with proper error logging"""
+    """Test the direct PostgreSQL connection with detailed diagnostics"""
     try:
         test_query = "SELECT COUNT(*) as total_rows FROM public.mbm_price_comparison LIMIT 1"
-        df = execute_sql_directly_supabase(test_query)
         
-        if len(df) > 0 and 'total_rows' in df.columns:
-            total_rows = df['total_rows'].iloc[0]
-            logger.info(f"✅ Connection test successful! Database has {total_rows} rows")
-            return True
-        else:
-            logger.error("❌ Connection test failed: No data returned")
-            return False
+        logger.info("🧪 Testing direct connection...")
+        
+        # Test with psycopg2 first
+        try:
+            df = execute_sql_with_psycopg2(test_query)
+            if len(df) > 0 and 'total_rows' in df.columns:
+                total_rows = df['total_rows'].iloc[0]
+                logger.info(f"✅ psycopg2 connection test successful! Database has {total_rows} rows")
+                return True
+        except Exception as e:
+            logger.warning(f"psycopg2 test failed: {str(e)}")
+        
+        # Test with pandas direct
+        try:
+            df = execute_sql_directly_supabase(test_query)
+            if len(df) > 0 and 'total_rows' in df.columns:
+                total_rows = df['total_rows'].iloc[0]
+                logger.info(f"✅ pandas direct connection test successful! Database has {total_rows} rows")
+                return True
+        except Exception as e:
+            logger.warning(f"pandas direct test failed: {str(e)}")
+        
+        # Test with SQLAlchemy
+        try:
+            df = execute_sql_with_sqlalchemy(test_query)
+            if len(df) > 0 and 'total_rows' in df.columns:
+                total_rows = df['total_rows'].iloc[0]
+                logger.info(f"✅ SQLAlchemy connection test successful! Database has {total_rows} rows")
+                return True
+        except Exception as e:
+            logger.warning(f"SQLAlchemy test failed: {str(e)}")
+        
+        logger.error("❌ All connection methods failed")
+        return False
             
     except Exception as e:
-        logger.error(f"❌ Connection test failed with detailed error: {str(e)}")
+        logger.error(f"❌ Connection test failed: {str(e)}")
         
-        # Additional diagnostic information
+        # Diagnostic information
         logger.error("🔍 Environment variables check:")
         logger.error(f"SUPABASE_HOST: {os.getenv('SUPABASE_HOST', 'NOT SET')}")
         logger.error(f"SUPABASE_DB: {os.getenv('SUPABASE_DB', 'NOT SET')}")
         logger.error(f"SUPABASE_USER: {os.getenv('SUPABASE_USER', 'NOT SET')}")
         logger.error(f"SUPABASE_PASSWORD: {'SET' if os.getenv('SUPABASE_PASSWORD') else 'NOT SET'}")
-        logger.error(f"SUPABASE_PORT: {os.getenv('SUPABASE_PORT', 'NOT SET (defaulting to 5432)')}")
+        logger.error(f"SUPABASE_PORT: {os.getenv('SUPABASE_PORT', 'NOT SET (defaulting to 6543)')}")
         
         return False
-
-def get_supabase_data_dynamic(sql_query: str) -> pd.DataFrame:
-    """Execute dynamic SQL query against Supabase using REST API with intelligent table detection"""
-    try:
-        supabase_url = os.getenv('SUPABASE_URL', 'https://fbiqlsoheofdmgqmjxfc.supabase.co')
-        supabase_key = os.getenv('SUPABASE_ANON_KEY')
-        
-        if not supabase_key:
-            raise Exception("Missing SUPABASE_ANON_KEY environment variable")
-        
-        headers = {
-            'apikey': supabase_key,
-            'Authorization': f'Bearer {supabase_key}',
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        }
-        
-        # Extract table name from SQL query
-        table_name = extract_table_from_sql(sql_query)
-        if not table_name:
-            table_name = "mbm_price_comparison"
-        
-        logger.info(f"Executing dynamic query on table: {table_name}")
-        logger.info(f"SQL Query: {sql_query[:200]}...")
-        
-        # Check if this is a simple SELECT * query
-        sql_lower = sql_query.lower().strip()
-        is_simple_query = (
-            sql_lower.startswith('select *') and 
-            'where' not in sql_lower and 
-            'group by' not in sql_lower and
-            'having' not in sql_lower and
-            '(' not in sql_lower
-        )
-        
-        if is_simple_query:
-            # Use REST API parameters for simple queries
-            rest_params = convert_sql_to_rest_params(sql_query)
-            base_url = f"{supabase_url}/rest/v1/{table_name}"
-            
-            all_data = []
-            page_size = 1000
-            offset = 0
-            
-            while True:
-                params = {
-                    'limit': page_size,
-                    'offset': offset,
-                    **rest_params
-                }
-                
-                logger.info(f"Fetching rows {offset} to {offset + page_size}")
-                
-                response = requests.get(base_url, headers=headers, params=params)
-                
-                if response.status_code == 200:
-                    page_data = response.json()
-                    
-                    if not page_data:
-                        break
-                        
-                    all_data.extend(page_data)
-                    logger.info(f"Retrieved {len(page_data)} rows (total so far: {len(all_data)})")
-                    
-                    if len(page_data) < page_size:
-                        break
-                        
-                    offset += page_size
-                    
-                else:
-                    error_msg = f"Supabase API error: {response.status_code} - {response.text}"
-                    logger.error(error_msg)
-                    raise Exception(error_msg)
-        
-        else:
-            # For complex queries, get all data first then filter in Python
-            logger.info("Complex query detected - fetching all data for Python filtering")
-            base_url = f"{supabase_url}/rest/v1/{table_name}"
-            
-            all_data = []
-            page_size = 1000
-            offset = 0
-            
-            while True:
-                params = {
-                    'limit': page_size,
-                    'offset': offset
-                }
-                
-                logger.info(f"Fetching rows {offset} to {offset + page_size}")
-                
-                response = requests.get(base_url, headers=headers, params=params)
-                
-                if response.status_code == 200:
-                    page_data = response.json()
-                    
-                    if not page_data:
-                        break
-                        
-                    all_data.extend(page_data)
-                    logger.info(f"Retrieved {len(page_data)} rows (total so far: {len(all_data)})")
-                    
-                    if len(page_data) < page_size:
-                        break
-                        
-                    offset += page_size
-                    
-                else:
-                    error_msg = f"Supabase API error: {response.status_code} - {response.text}"
-                    logger.error(error_msg)
-                    raise Exception(error_msg)
-        
-        logger.info(f"Completed data fetch: {len(all_data)} total records")
-        df = pd.DataFrame(all_data)
-        
-        # Apply SQL transformations if this was a complex query
-        if not is_simple_query:
-            df = apply_sql_transformations(df, sql_query)
-        
-        return df
-            
-    except Exception as e:
-        logger.error(f"Dynamic SQL execution failed: {str(e)}")
-        raise
-
-def extract_table_from_sql(sql_query: str) -> str:
-    """Extract table name from SQL query"""
-    try:
-        sql_lower = sql_query.lower().strip()
-        
-        # Look for FROM clause
-        from_match = re.search(r'\bfrom\s+(?:public\.)?([a-zA-Z_][a-zA-Z0-9_]*)', sql_lower)
-        if from_match:
-            table_name = from_match.group(1)
-            # Clean table name
-            table_name = table_name.replace('`', '').replace('"', '').replace('public.', '')
-            return table_name
-        
-        # If no FROM found, return default
-        return "mbm_price_comparison"
-        
-    except Exception as e:
-        logger.warning(f"Could not extract table name: {str(e)}")
-        return "mbm_price_comparison"
-
-def convert_sql_to_rest_params(sql_query: str) -> Dict[str, Any]:
-    """Convert basic SQL operations to Supabase REST API parameters - CASE SENSITIVE"""
-    params = {}
-    sql_original = sql_query.strip()  # Keep original case
-    sql_lower = sql_query.lower().strip()  # Only use lowercase for pattern matching
-    
-    try:
-        # Handle SELECT columns - preserve original case
-        select_match = re.search(r'select\s+(.*?)\s+from', sql_lower, re.DOTALL)
-        if select_match:
-            # Get the original case version of the select clause
-            select_start = select_match.start(1)
-            select_end = select_match.end(1)
-            # Find the corresponding position in the original query
-            from_pos = sql_original.lower().find(' from ')
-            if from_pos > 0:
-                select_original = sql_original[select_original.lower().find('select') + 6:from_pos].strip()
-                
-                if select_original != '*' and 'distinct' not in select_original.lower():
-                    # Extract column names preserving case - only if no functions
-                    if '(' not in select_original and 'round' not in select_original.lower():
-                        columns = [col.strip().replace('"', '') for col in select_original.split(',')]
-                        if columns and len(columns) <= 20:  # Limit to first 20 columns
-                            params['select'] = ','.join(columns[:20])
-        
-        # Handle ORDER BY - preserve case
-        order_match = re.search(r'order\s+by\s+([^;]+)', sql_lower)
-        if order_match:
-            # Find original case version
-            order_start = sql_original.lower().find('order by') + 8
-            order_clause = sql_original[order_start:].split(';')[0].strip()
-            
-            # Basic order conversion (first column only)
-            order_parts = order_clause.split(',')[0].strip().split()
-            if len(order_parts) >= 1:
-                column = order_parts[0].replace('"', '').replace('`', '')
-                direction = 'desc' if len(order_parts) > 1 and 'desc' in order_parts[1].lower() else 'asc'
-                params['order'] = f"{column}.{direction}"
-        
-        # Handle LIMIT
-        limit_match = re.search(r'limit\s+(\d+)', sql_lower)
-        if limit_match:
-            params['limit'] = min(int(limit_match.group(1)), 5000)  # Cap at 5000
-        
-        return params
-        
-    except Exception as e:
-        logger.warning(f"SQL to REST conversion failed: {str(e)}, using basic params")
-        return {}
-
-def apply_sql_transformations(df: pd.DataFrame, sql_query: str) -> pd.DataFrame:
-    """Apply SQL transformations that couldn't be handled by REST API"""
-    try:
-        sql_lower = sql_query.lower().strip()
-        
-        # Handle WHERE clauses
-        if 'where' in sql_lower:
-            df = apply_where_filters(df, sql_query)
-        
-        # Handle calculated columns (basic support)
-        if 'case when' in sql_lower or 'round(' in sql_lower:
-            df = add_calculated_columns(df, sql_query)
-        
-        # Handle GROUP BY (basic support)
-        if 'group by' in sql_lower:
-            df = apply_group_by(df, sql_query)
-        
-        return df
-        
-    except Exception as e:
-        logger.warning(f"SQL transformation failed: {str(e)}, returning original data")
-        return df
-
-def apply_where_filters(df: pd.DataFrame, sql_query: str) -> pd.DataFrame:
-    """Apply WHERE clause filters to DataFrame"""
-    try:
-        sql_upper = sql_query.upper()
-        
-        # Common pricing filters
-        if '"PRICE DIFFERENCE" > 0' in sql_upper and 'Price Difference' in df.columns:
-            df = df[df['Price Difference'] > 0]
-        elif '"PRICE DIFFERENCE" < 0' in sql_upper and 'Price Difference' in df.columns:
-            df = df[df['Price Difference'] < 0]
-        elif '"PRICE DIFFERENCE" < -50' in sql_upper and 'Price Difference' in df.columns:
-            df = df[df['Price Difference'] < -50]
-        
-        # Ranking filters
-        if '"YOUR PRICE RANK" > "COMPETITOR PRICE RANK"' in sql_upper:
-            if 'Your Price Rank' in df.columns and 'Competitor Price Rank' in df.columns:
-                df = df[df['Your Price Rank'] > df['Competitor Price Rank']]
-        
-        return df
-        
-    except Exception as e:
-        logger.warning(f"WHERE filter application failed: {str(e)}")
-        return df
-
-def add_calculated_columns(df: pd.DataFrame, sql_query: str) -> pd.DataFrame:
-    """Add calculated columns based on SQL query"""
-    try:
-        # Add common calculated columns for pricing analysis
-        if 'Price Difference' in df.columns:
-            if 'overpricing_pounds' not in df.columns:
-                df['overpricing_pounds'] = df['Price Difference'] / 100
-            
-            if 'Your Price' in df.columns and 'overpricing_percentage' not in df.columns:
-                df['overpricing_percentage'] = (df['Price Difference'] / df['Your Price'] * 100).round(1)
-        
-        if 'Your Price Rank' in df.columns and 'Competitor Price Rank' in df.columns:
-            if 'ranking_gap' not in df.columns:
-                df['ranking_gap'] = df['Your Price Rank'] - df['Competitor Price Rank']
-        
-        return df
-        
-    except Exception as e:
-        logger.warning(f"Calculated column addition failed: {str(e)}")
-        return df
-
-def apply_group_by(df: pd.DataFrame, sql_query: str) -> pd.DataFrame:
-    """Apply GROUP BY operations (basic support)"""
-    try:
-        # This is a simplified implementation
-        # For complex GROUP BY operations, consider using PostgreSQL directly
-        sql_lower = sql_query.lower()
-        
-        if 'group by' in sql_lower and 'count(' in sql_lower:
-            # Extract group by columns (basic implementation)
-            group_match = re.search(r'group\s+by\s+([^order\s]+)', sql_lower)
-            if group_match:
-                group_cols = [col.strip().replace('"', '') for col in group_match.group(1).split(',')]
-                group_cols = [col for col in group_cols if col in df.columns]
-                
-                if group_cols:
-                    # Basic aggregation
-                    numeric_cols = df.select_dtypes(include=['number']).columns
-                    agg_dict = {col: 'count' for col in numeric_cols[:5]}  # Limit aggregations
-                    
-                    if agg_dict:
-                        df = df.groupby(group_cols).agg(agg_dict).reset_index()
-        
-        return df
-        
-    except Exception as e:
-        logger.warning(f"GROUP BY application failed: {str(e)}")
-        return df
 
 def generate_dynamic_analytics(df: pd.DataFrame, sql_query: str, report_name: str) -> Dict[str, Any]:
     """Generate analytics for dynamic reports"""
@@ -928,23 +701,30 @@ async def health_check():
     """Health check endpoint"""
     return {
         "status": "healthy",
-        "service": "Dynamic Pricing Intelligence Report API",
-        "version": "3.0.0",
+        "service": "Dynamic Pricing Intelligence Report API (Direct Connection Only)",
+        "version": "3.1.0",
         "timestamp": datetime.now().isoformat(),
         "features": [
-            "Dynamic SQL query execution",
+            "Direct PostgreSQL connection (FAST & RELIABLE)",
+            "Dynamic SQL query execution", 
             "Automated CSV generation",
             "Supabase storage integration",
             "Real-time analytics",
             "N8N workflow compatibility"
         ],
+        "connection_methods": [
+            "psycopg2 (primary - fastest)",
+            "pandas direct connection",
+            "SQLAlchemy engine"
+        ],
+        "performance": "Optimized for large datasets with direct database connections",
         "endpoints": [
             "/generate-dynamic-report",
-            "/generate-csv (legacy)",
-            "/analyze (legacy)", 
-            "/test-db",
+            "/generate-csv-from-query", 
+            "/test-direct-connection",
             "/test-storage",
             "/schema",
+            "/query-examples",
             "/reports/download/{filename}",
             "/docs"
         ]
