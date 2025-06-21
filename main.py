@@ -301,30 +301,33 @@ def execute_sql_with_sqlalchemy(sql_query: str) -> pd.DataFrame:
 
 def get_supabase_data_enhanced(sql_query: str) -> pd.DataFrame:
     """
-    Enhanced SQL execution with multiple fallback methods
-    This replaces get_supabase_data_dynamic
+    Enhanced SQL execution with multiple fallback methods with detailed error logging
     """
     
     # Method 1: Direct PostgreSQL with pandas (PREFERRED)
     try:
         logger.info("🎯 Method 1: Trying direct PostgreSQL with pandas...")
+        logger.info("📝 Testing direct connection with hard-coded username...")
         return execute_sql_directly_supabase(sql_query)
     except Exception as e:
-        logger.warning(f"Method 1 failed: {str(e)}")
+        logger.error(f"❌ Method 1 FAILED: {str(e)}")
+        logger.error(f"🔍 Direct connection error details: {type(e).__name__}")
     
     # Method 2: SQLAlchemy engine (BACKUP)
     try:
         logger.info("🎯 Method 2: Trying SQLAlchemy engine...")
         return execute_sql_with_sqlalchemy(sql_query)
     except Exception as e:
-        logger.warning(f"Method 2 failed: {str(e)}")
+        logger.error(f"❌ Method 2 FAILED: {str(e)}")
+        logger.error(f"🔍 SQLAlchemy error details: {type(e).__name__}")
     
-    # Method 3: Fallback to your existing REST API method (LAST RESORT)
+    # Method 3: Fallback to REST API (LAST RESORT)
     try:
         logger.info("🎯 Method 3: Falling back to REST API...")
+        logger.warning("⚠️  Direct connections failed - using REST API fallback (slower for complex queries)")
         return get_supabase_data_dynamic(sql_query)  # Your existing function
     except Exception as e:
-        logger.error(f"All methods failed. Final error: {str(e)}")
+        logger.error(f"❌ All methods failed. Final error: {str(e)}")
         raise Exception(f"Unable to execute SQL query with any available method: {str(e)}")
 
 def test_direct_connection() -> bool:
