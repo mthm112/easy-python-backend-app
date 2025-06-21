@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from urllib.parse import quote_plus
 import json
 import hashlib
 import psycopg2
@@ -314,16 +315,10 @@ def execute_sql_with_psycopg2(sql_query: str) -> pd.DataFrame:
         
         logger.info("🔌 Attempting direct psycopg2 connection...")
         
-        # Create connection
-        conn = psycopg2.connect(
-            host=host,
-            database=database,
-            user=user,
-            password=password,
-            port=port,
-            sslmode='require',
-            connect_timeout=30
-        )
+        # Create connection using connection string approach (FIXED)
+        encoded_password = quote_plus(password)
+        conn_string = f"postgresql://{user}:{encoded_password}@{host}:{port}/{database}?sslmode=require&connect_timeout=30"
+        conn = psycopg2.connect(conn_string)
         
         # Execute query and get DataFrame
         df = pd.read_sql_query(sql_query, conn)
