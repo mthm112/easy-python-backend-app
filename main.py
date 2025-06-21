@@ -1477,10 +1477,6 @@ async def get_query_examples():
         ]
     }
 
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", 8000))
-
 @app.get("/test-direct-connection")
 async def test_direct_db_connection():
     """Test direct PostgreSQL connection"""
@@ -1498,4 +1494,8 @@ async def test_direct_db_connection():
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
