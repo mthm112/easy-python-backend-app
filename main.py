@@ -13,6 +13,9 @@ from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import json
 import hashlib
+import psycopg2
+import psycopg2.extras
+from sqlalchemy import create_engine
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -210,6 +213,117 @@ class SupabaseStorage:
             logger.warning(f"Could not delete test file: {str(e)}")
         
         return True
+
+def execute_sql_directly_supabase(sql_query: str) -> pd.DataFrame:
+    """Execute SQL directly against Supabase PostgreSQL"""
+    try:
+        # Build connection string using your exact environment variables
+        host = os.getenv('SUPABASE_HOST', 'aws-0-eu-west-2.pooler.supabase.com')
+        database = os.getenv('SUPABASE_DB', 'postgres') 
+        user = os.getenv('SUPABASE_USER', 'postgres.fbiqlsoheofdmgqmjxfc')
+        password = os.getenv('SUPABASE_PASSWORD')
+        port = os.getenv('SUPABASE_PORT', '5432')
+        
+        if not password:
+            raise Exception("SUPABASE_PASSWORD environment variable is required")
+        
+        # Create connection string
+        conn_string = f"postgresql://{user}:{password}@{host}:{port}/{database}"
+        
+        logger.info("🚀 Attempting direct PostgreSQL execution...")
+        logger.info(f"Host: {host}")
+        logger.info(f"Database: {database}")
+        logger.info(f"User: {user}")
+        logger.info(f"SQL Query: {sql_query[:150]}...")
+        
+        # Execute query using pandas (handles connection automatically)
+        df = pd.read_sql_query(sql_query, conn_string)
+        
+        logger.info(f"✅ Direct SQL execution successful: {len(df)} rows returned")
+        return df
+        
+    except Exception as e:
+        logger.error(f"❌ Direct SQL execution failed: {str(e)}")
+        raise
+
+def execute_sql_with_sqlalchemy(sql_query: str) -> pd.DataFrame:
+    """Alternative method using SQLAlchemy engine"""
+    try:
+        # Build connection string
+        host = os.getenv('SUPABASE_HOST', 'aws-0-eu-west-2.pooler.supabase.com')
+        database = os.getenv('SUPABASE_DB', 'postgres')
+        user = os.getenv('SUPABASE_USER', 'postgres.fbiqlsoheofdmgqmjxfc')
+        password = os.getenv('SUPABASE_PASSWORD')
+        port = os.getenv('SUPABASE_PORT', '5432')
+        
+        if not password:
+            raise Exception("SUPABASE_PASSWORD environment variable is required")
+        
+        # Create SQLAlchemy engine
+        engine = create_engine(
+            f"postgresql://{user}:{password}@{host}:{port}/{database}",
+            pool_pre_ping=True,
+            pool_recycle=300
+        )
+        
+        logger.info("🔧 Attempting SQLAlchemy execution...")
+        logger.info(f"SQL Query: {sql_query[:150]}...")
+        
+        # Execute query
+        df = pd.read_sql_query(sql_query, engine)
+        
+        logger.info(f"✅ SQLAlchemy execution successful: {len(df)} rows returned")
+        return df
+        
+    except Exception as e:
+        logger.error(f"❌ SQLAlchemy execution failed: {str(e)}")
+        raise
+
+def get_supabase_data_enhanced(sql_query: str) -> pd.DataFrame:
+    """
+    Enhanced SQL execution with multiple fallback methods
+    This replaces get_supabase_data_dynamic
+    """
+    
+    # Method 1: Direct PostgreSQL with pandas (PREFERRED)
+    try:
+        logger.info("🎯 Method 1: Trying direct PostgreSQL with pandas...")
+        return execute_sql_directly_supabase(sql_query)
+    except Exception as e:
+        logger.warning(f"Method 1 failed: {str(e)}")
+    
+    # Method 2: SQLAlchemy engine (BACKUP)
+    try:
+        logger.info("🎯 Method 2: Trying SQLAlchemy engine...")
+        return execute_sql_with_sqlalchemy(sql_query)
+    except Exception as e:
+        logger.warning(f"Method 2 failed: {str(e)}")
+    
+    # Method 3: Fallback to your existing REST API method (LAST RESORT)
+    try:
+        logger.info("🎯 Method 3: Falling back to REST API...")
+        return get_supabase_data_dynamic(sql_query)  # Your existing function
+    except Exception as e:
+        logger.error(f"All methods failed. Final error: {str(e)}")
+        raise Exception(f"Unable to execute SQL query with any available method: {str(e)}")
+
+def test_direct_connection() -> bool:
+    """Test the direct PostgreSQL connection"""
+    try:
+        test_query = "SELECT COUNT(*) as total_rows FROM public.mbm_price_comparison LIMIT 1"
+        df = execute_sql_directly_supabase(test_query)
+        
+        if len(df) > 0 and 'total_rows' in df.columns:
+            total_rows = df['total_rows'].iloc[0]
+            logger.info(f"✅ Connection test successful! Database has {total_rows} rows")
+            return True
+        else:
+            logger.error("❌ Connection test failed: No data returned")
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Connection test failed: {str(e)}")
+        return False
 
 def get_supabase_data_dynamic(sql_query: str) -> pd.DataFrame:
     """Execute dynamic SQL query against Supabase using REST API with intelligent table detection"""
@@ -817,7 +931,7 @@ async def generate_dynamic_report(request: DynamicReportRequest):
         logger.info(f"SQL Query: {request.sql_query[:200]}...")
         
         # Execute dynamic SQL query
-        df = get_supabase_data_dynamic(request.sql_query)
+        df = get_supabase_data_enhanced(request.sql_query)
         
         if len(df) == 0:
             raise HTTPException(status_code=404, detail="Query returned no results")
@@ -944,7 +1058,7 @@ async def generate_csv_from_query(request: SQLRequest):
         logger.info(f"Executing SQL query for CSV generation: {request.sql_query[:100]}...")
         
         # Execute query
-        df = get_supabase_data_dynamic(request.sql_query)
+        df = get_supabase_data_enhanced(request.sql_query)
         
         if len(df) == 0:
             raise HTTPException(status_code=404, detail="Query returned no results")
@@ -1230,7 +1344,7 @@ async def analyze_data_legacy(request: SQLRequest):
         logger.info(f"Analyzing data via legacy endpoint: {request.sql_query[:100]}...")
         
         # Execute query
-        df = get_supabase_data_dynamic(request.sql_query)
+        df = get_supabase_data_enhanced(request.sql_query)
         
         logger.info(f"Analysis query returned {len(df)} rows")
         
@@ -1367,4 +1481,22 @@ async def get_query_examples():
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
+
+@app.get("/test-direct-connection")
+async def test_direct_db_connection():
+    """Test direct PostgreSQL connection"""
+    try:
+        success = test_direct_connection()
+        return {
+            "success": success,
+            "method": "direct_postgresql", 
+            "message": "Direct connection test completed",
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
     uvicorn.run(app, host="0.0.0.0", port=port)
